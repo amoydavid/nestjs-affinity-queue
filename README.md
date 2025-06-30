@@ -151,4 +151,4 @@ pnpm --filter nestjs-affinity-queue build:watch
 
 ## 许可证
 
-AGPL-3.0 - 详见 [LICENSE](./LICENSE) 文件 
+MIT - 详见 [LICENSE](./LICENSE) 文件 
