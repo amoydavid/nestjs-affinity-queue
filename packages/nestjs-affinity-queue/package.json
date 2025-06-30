@@ -1,6 +1,6 @@
 {
   "name": "nestjs-affinity-queue",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "NestJS 可控队列插件 - 支持身份亲和性调度的分布式任务处理系统",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -28,7 +28,7 @@
     "bullmq"
   ],
   "author": "David",
-  "license": "AGPL-3.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/amoydavid/nestjs-affinity-queue.git"

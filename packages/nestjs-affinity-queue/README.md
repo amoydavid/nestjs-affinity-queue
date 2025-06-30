@@ -320,4 +320,4 @@ export class AppService {
 
 ## 许可证
 
-AGPL-3.0
+MIT
