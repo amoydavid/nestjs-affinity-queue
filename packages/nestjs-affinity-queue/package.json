@@ -29,6 +29,14 @@
   ],
   "author": "David",
   "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amoydavid/nestjs-affinity-queue.git"
+  },
+  "bugs": {
+    "url": "https://github.com/amoydavid/nestjs-affinity-queue/issues"
+  },
+  "homepage": "https://github.com/amoydavid/nestjs-affinity-queue#readme",
   "peerDependencies": {
     "@nestjs/common": "^10.0.0",
     "@nestjs/core": "^10.0.0",
