@@ -1,0 +1,26 @@
+{
+  "name": "nestjs-affinity-queue-workspace",
+  "version": "1.0.0",
+  "description": "NestJS 可控队列插件 - 支持身份亲和性调度的分布式任务处理系统",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "dev:example": "pnpm --filter example dev",
+    "build:plugin": "pnpm --filter nestjs-affinity-queue build"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.15.0"
+} 

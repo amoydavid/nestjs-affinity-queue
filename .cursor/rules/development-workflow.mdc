@@ -1,0 +1,153 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 开发工作流指南
+
+## 项目设置
+
+### 依赖安装
+```bash
+pnpm install
+```
+
+### 开发环境准备
+1. 启动 Redis 服务
+```bash
+# 使用 Docker
+docker run -d -p 6379:6379 redis:7-alpine
+
+# 或本地安装
+redis-server
+```
+
+## 开发命令
+
+### 构建命令
+```bash
+# 构建所有包
+pnpm build
+
+# 构建核心插件包
+pnpm --filter nestjs-affinity-queue build
+
+# 监听构建（开发模式）
+pnpm --filter nestjs-affinity-queue build:watch
+```
+
+### 开发模式
+```bash
+# 启动示例应用（开发模式）
+pnpm dev:example
+
+# 同时监听插件构建
+pnpm --filter nestjs-affinity-queue build:watch
+```
+
+### 代码质量
+```bash
+# 格式化代码
+pnpm format
+
+# 代码检查
+pnpm lint
+
+# 运行测试
+pnpm test
+```
+
+## 部署流程
+
+### 生产构建
+```bash
+# 构建所有包
+pnpm build
+
+# 进入示例应用目录
+cd packages/example
+```
+
+### PM2 集群部署
+```bash
+# 启动集群
+pm2 start ecosystem.config.js
+
+# 查看状态
+pm2 status
+
+# 查看日志
+pm2 logs
+
+# 重启集群
+pm2 restart all
+
+# 停止集群
+pm2 stop all
+```
+
+## 测试流程
+
+### 功能测试
+```bash
+# 进入示例应用目录
+cd packages/example
+
+# 运行各种测试脚本
+./test-simple-worker.sh
+./test-parallel.sh
+./test-affinity.sh
+./test-suite.sh
+```
+
+### API 测试
+```bash
+# 测试任务提交
+curl -X POST http://localhost:3000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"type": "test", "identifyTag": "test-1", "payload": {}}'
+
+# 测试批量任务
+curl -X POST "http://localhost:3000/tasks/batch?count=10&companies=2"
+
+# 查看队列状态
+curl http://localhost:3000/queue/stats
+```
+
+## 调试技巧
+
+### 日志查看
+```bash
+# 查看 PM2 日志
+pm2 logs
+
+# 查看特定应用日志
+pm2 logs app-scheduler
+pm2 logs app-workers
+
+# 实时日志
+pm2 logs --lines 100 --follow
+```
+
+### 环境变量调试
+```bash
+# 检查环境变量
+echo $APP_ROLE
+echo $MAX_BATCH_SIZE
+echo $REDIS_URL
+```
+
+## 常见问题
+
+### Redis 连接问题
+- 确保 Redis 服务正在运行
+- 检查 `REDIS_URL` 环境变量
+- 验证网络连接和端口
+
+### 权限问题
+- 确保有足够的权限运行 PM2
+- 检查文件系统权限
+
+### 端口冲突
+- 确保端口 3000 未被占用
+- 检查 Redis 端口 6379 是否可用

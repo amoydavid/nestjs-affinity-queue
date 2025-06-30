@@ -1,0 +1,118 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 架构模式与最佳实践
+
+## 设计模式
+
+### 模块化架构
+项目采用 NestJS 模块化架构，将功能分离到不同的模块中：
+
+- **QueueModule**: 主模块，整合所有功能
+- **SchedulerModule**: 调度器模块，负责任务分发
+- **WorkerModule**: Worker 模块，负责任务执行
+
+### 工厂模式
+[packages/nestjs-affinity-queue/src/worker/worker.factory.ts](mdc:packages/nestjs-affinity-queue/src/worker/worker.factory.ts) 使用工厂模式创建 Worker 实例。
+
+### 处理器模式
+- [packages/nestjs-affinity-queue/src/scheduler/scheduler.processor.ts](mdc:packages/nestjs-affinity-queue/src/scheduler/scheduler.processor.ts): 调度处理器
+- [packages/nestjs-affinity-queue/src/worker/worker.processor.ts](mdc:packages/nestjs-affinity-queue/src/worker/worker.processor.ts): Worker 处理器
+
+## 核心算法
+
+### 强制亲和性调度算法
+调度器遵循以下步骤：
+
+1. **强制亲和性检查**: 查找处理相同 `identifyTag` 的 Worker
+2. **空闲节点分配**: 如果没有找到，分配给空闲 Worker
+3. **保持等待**: 如果都不满足，任务继续等待
+
+### 批次控制机制
+- 每个 Worker 有 `maxBatchSize` 限制
+- 达到批次限制后自动解除绑定
+- 防止单一 `identifyTag` 垄断资源
+
+## 配置管理
+
+### 环境变量配置
+使用 [packages/nestjs-affinity-queue/src/config/config.ts](mdc:packages/nestjs-affinity-queue/src/config/config.ts) 管理配置：
+
+```typescript
+// 支持的环境变量
+APP_ROLE: 'SCHEDULER' | 'WORKER' | 'BOTH'
+MAX_BATCH_SIZE: number
+REDIS_URL: string
+```
+
+### 配置验证
+[packages/nestjs-affinity-queue/src/config/config.schema.ts](mdc:packages/nestjs-affinity-queue/src/config/config.schema.ts) 提供配置模式验证。
+
+## 状态管理
+
+### Worker 状态
+[packages/nestjs-affinity-queue/src/common/interfaces/worker-state.interface.ts](mdc:packages/nestjs-affinity-queue/src/common/interfaces/worker-state.interface.ts) 定义 Worker 状态：
+
+```typescript
+interface WorkerState {
+  workerId: string;
+  status: 'idle' | 'running';
+  currentIdentifyTag: string | null;
+  currentBatchSize: number;
+}
+```
+
+### Redis 状态存储
+- 使用 Redis Hash 存储 Worker 状态
+- 支持跨进程状态同步
+- 提供持久化保证
+
+## 错误处理
+
+### 任务失败处理
+- 任务执行失败时记录错误日志
+- 支持任务重试机制
+- 防止失败任务阻塞队列
+
+### 连接异常处理
+- Redis 连接断开时自动重连
+- 网络异常时的优雅降级
+- 状态不一致时的恢复机制
+
+## 性能优化
+
+### 队列优化
+- 使用 BullMQ 提供高性能队列
+- 支持队列优先级
+- 实现防队头阻塞机制
+
+### 内存管理
+- 及时清理完成的任务
+- 控制批次大小防止内存溢出
+- 使用流式处理大数据量任务
+
+## 监控与日志
+
+### 日志记录
+- 记录关键操作日志
+- 支持不同日志级别
+- 提供结构化日志输出
+
+### 性能监控
+- 任务处理时间统计
+- 队列长度监控
+- Worker 状态监控
+
+## 扩展性设计
+
+### 水平扩展
+- 支持动态添加 Worker 节点
+- 自动负载均衡
+- 无状态设计便于扩展
+
+### 插件化架构
+- 支持自定义任务处理器
+- 可扩展的调度算法
+- 灵活的配置选项

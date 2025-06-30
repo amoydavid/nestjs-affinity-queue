@@ -1,0 +1,80 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 快速开始指南
+
+## 🚀 5分钟快速启动
+
+### 1. 安装依赖
+```bash
+pnpm install
+```
+
+### 2. 启动 Redis
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+```
+
+### 3. 启动示例应用
+```bash
+pnpm dev:example
+```
+
+### 4. 测试功能
+```bash
+curl -X POST http://localhost:3000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"type": "test", "identifyTag": "company-123", "payload": {"message": "Hello"}}'
+```
+
+## 📚 核心文档
+
+- [项目概览](mdc:.cursor/rules/project-overview.mdc): 项目核心概念
+- [核心插件结构](mdc:.cursor/rules/core-plugin-structure.mdc): 插件包结构
+- [示例应用指南](mdc:.cursor/rules/example-app-guide.mdc): 示例应用使用
+- [开发工作流](mdc:.cursor/rules/development-workflow.mdc): 开发流程
+- [架构模式](mdc:.cursor/rules/architecture-patterns.mdc): 设计模式
+- [API 参考](mdc:.cursor/rules/api-reference.mdc): API 文档
+
+## 🔧 常用命令
+
+```bash
+# 开发模式
+pnpm dev:example
+
+# 构建项目
+pnpm build
+
+# PM2 部署
+cd packages/example
+pm2 start ecosystem.config.js
+```
+
+## 🎯 核心特性
+
+- **强制亲和性调度**: 相同 `identifyTag` 的任务按顺序处理
+- **分布式架构**: 调度器与 Worker 完全分离
+- **批次控制**: 可配置的批次大小限制
+
+## 📁 关键文件
+
+- [packages/nestjs-affinity-queue/src/index.ts](mdc:packages/nestjs-affinity-queue/src/index.ts): 插件入口
+- [packages/example/src/app.module.ts](mdc:packages/example/src/app.module.ts): 示例配置
+- [packages/example/ecosystem.config.js](mdc:packages/example/ecosystem.config.js): PM2 配置
+
+## 🆘 常见问题
+
+### Redis 连接问题
+- 确保 Redis 服务正在运行
+- 检查端口 6379 是否可用
+- 验证网络连接
+
+### 权限问题
+- 确保有足够权限运行 PM2
+- 检查文件系统权限
+
+### 端口冲突
+- 确保端口 3000 未被占用
+- 检查 Redis 端口 6379 是否可用

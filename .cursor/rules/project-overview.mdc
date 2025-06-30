@@ -1,0 +1,38 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# NestJS 亲和队列项目概览
+
+## 项目简介
+这是一个功能强大的 NestJS 队列插件，支持基于身份标识的强制亲和性调度。项目采用 monorepo 结构，包含核心插件包和示例应用。
+
+## 核心概念
+
+### 强制亲和性调度
+- 基于 `identifyTag` 的任务分组
+- 确保相同 `identifyTag` 的任务按顺序处理
+- 防止并发冲突和状态不一致
+
+### 分布式架构
+- **调度器 (Scheduler)**: 系统的"大脑"，负责任务分发
+- **工作节点 (Worker)**: 系统的"执行者"，负责任务执行
+- **Redis**: 作为通信中介和状态存储
+
+### 关键实体
+- **Task**: 包含 `type`、`identifyTag` 和 `payload` 的任务对象
+- **WorkerState**: 工作节点状态，包含 `workerId`、`status`、`currentIdentifyTag` 等
+
+## 项目结构
+- [packages/nestjs-affinity-queue/](mdc:packages/nestjs-affinity-queue): 核心插件包
+- [packages/example/](mdc:packages/example): 示例应用
+- [README.md](mdc:README.md): 项目说明文档
+- [PRD.md](mdc:PRD.md): 需求规格说明书
+
+## 技术栈
+- **框架**: NestJS
+- **队列**: BullMQ (@nestjs/bullmq)
+- **存储**: Redis
+- **部署**: PM2 集群
+- **包管理**: pnpm workspace
