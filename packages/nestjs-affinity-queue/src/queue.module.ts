@@ -110,16 +110,11 @@ export class QueueModule {
       }),
     ];
 
-    const providers: any[] = [QueueService];
-    const exportsList: any[] = [QueueService];
+    const providers: any[] = [];
+    const exportsList: any[] = [];
 
-    // 根据角色添加不同的模块
+    // 根据角色添加不同的服务和模块
     if (role === 'SCHEDULER' || role === 'BOTH') {
-      imports.push(
-        BullModule.registerQueue({
-          name: pendingQueueName,
-        })
-      );
       providers.push(SchedulerProcessor);
     }
 
@@ -127,6 +122,10 @@ export class QueueModule {
       providers.push(WorkerService);
       exportsList.push(WorkerService);
     }
+
+    // QueueService 在所有模式下都需要，因为需要添加任务
+    providers.push(QueueService);
+    exportsList.push(QueueService);
 
     return {
       module: QueueModule,

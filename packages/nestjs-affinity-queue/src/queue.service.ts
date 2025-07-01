@@ -1,20 +1,26 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
-import { InjectQueue } from '@nestjs/bullmq';
 import { Queue, Job } from 'bullmq';
+import { Redis } from 'ioredis';
 import { Task } from './common/interfaces/task.interface';
 import { queueConfig } from './config/config';
 
 @Injectable()
 export class QueueService {
   private readonly logger = new Logger(QueueService.name);
+  private redis: Redis;
+  private pendingQueue: Queue;
 
   constructor(
     @Inject(queueConfig.KEY)
     private readonly config: ConfigType<typeof queueConfig>,
-    @InjectQueue('pending-tasks')
-    private readonly pendingQueue: Queue,
-  ) {}
+  ) {
+    this.redis = new Redis(this.config.redisUrl);
+    // 动态创建队列实例
+    this.pendingQueue = new Queue(this.config.pendingQueueName, {
+      connection: this.redis,
+    });
+  }
 
   /**
    * 添加任务到待调度队列
@@ -58,5 +64,12 @@ export class QueueService {
       completed: completed.length,
       failed: failed.length,
     };
+  }
+
+  /**
+   * 获取队列实例（用于内部使用）
+   */
+  getQueue(): Queue {
+    return this.pendingQueue;
   }
 } 

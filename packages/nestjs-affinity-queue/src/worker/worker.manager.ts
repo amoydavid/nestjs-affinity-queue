@@ -4,6 +4,7 @@ import { Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { DynamicWorkerProcessor, WorkerFactory } from './worker.factory';
 import { Task } from '../common/interfaces/task.interface';
+import { RedisUtils } from '../common/utils/redis.utils';
 import { queueConfig } from '../config/config';
 
 /**
@@ -103,13 +104,68 @@ export class WorkerManager implements OnModuleInit, OnModuleDestroy {
     const workerIds: string[] = [];
     
     for (let i = 0; i < count; i++) {
-      const workerId = `worker-${i}-${Date.now()}`;
+      // 使用更稳定的 Worker ID 生成策略
+      const workerId = this.generateStableWorkerId(i);
       await this.createWorker(workerId, maxBatchSize);
       workerIds.push(workerId);
     }
 
     this.logger.log(`WorkerManager 创建了 ${count} 个 Worker: ${workerIds.join(', ')}`);
     return workerIds;
+  }
+
+  /**
+   * 生成稳定的 Worker ID
+   * 使用进程 ID 和索引，避免每次重启都生成不同的 ID
+   * @param index Worker 索引
+   * @returns 稳定的 Worker ID
+   */
+  private generateStableWorkerId(index: number): string {
+    const processId = process.pid;
+    const hostname = require('os').hostname().replace(/[^a-zA-Z0-9]/g, '');
+    return `worker-${hostname}-${processId}-${index}`;
+  }
+
+  /**
+   * 清理过期的 Worker 状态
+   * 移除不再活跃的 Worker 状态记录
+   */
+  async cleanupExpiredWorkerStates(): Promise<void> {
+    try {
+      this.logger.log('开始清理过期的 Worker 状态...');
+      
+      const pattern = `${this.config.workerStatePrefix}:*`;
+      const keys = await RedisUtils.scanKeys(this.redis, pattern);
+      
+      let cleanedCount = 0;
+      
+      for (const key of keys) {
+        try {
+          const data = await this.redis.hgetall(key);
+          if (data && data.workerId) {
+            // 检查该 Worker 是否仍然存在
+            const workerExists = this.workers.has(data.workerId);
+            
+            if (!workerExists) {
+              // Worker 不存在，清理状态
+              await this.redis.del(key);
+              cleanedCount++;
+              this.logger.log(`清理了过期 Worker 状态: ${data.workerId}`);
+            }
+          }
+        } catch (error) {
+          this.logger.error(`清理 Worker 状态时发生错误 ${key}:`, error);
+        }
+      }
+      
+      if (cleanedCount > 0) {
+        this.logger.log(`成功清理了 ${cleanedCount} 个过期的 Worker 状态`);
+      } else {
+        this.logger.log('未发现需要清理的过期 Worker 状态');
+      }
+    } catch (error) {
+      this.logger.error('清理过期 Worker 状态时发生错误:', error);
+    }
   }
 
   /**

@@ -25,7 +25,7 @@ import { TaskHandlerService } from './task-handler.service';
       },
       queueOptions: {
         // 自定义队列前缀，支持多实例隔离
-        pendingQueueName: process.env.PENDING_QUEUE_NAME || 'my-app-pending-tasks',
+        pendingQueueName: process.env.PENDING_QUEUE_NAME || 'pending-tasks',
         workerQueuePrefix: process.env.WORKER_QUEUE_PREFIX || 'my-app-worker-queue',
         workerStatePrefix: process.env.WORKER_STATE_PREFIX || 'my-app-worker-state',
         schedulerInterval: parseInt(process.env.SCHEDULER_INTERVAL || '1000', 10),

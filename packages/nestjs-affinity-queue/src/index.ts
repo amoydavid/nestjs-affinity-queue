@@ -5,6 +5,7 @@ export type { QueueModuleOptions } from './queue.module';
 // 服务
 export { QueueService } from './queue.service';
 export { WorkerService } from './worker/worker.service';
+export { WorkerManager } from './worker/worker.manager';
 
 // 接口和类型
 export { Task } from './common/interfaces/task.interface';
@@ -34,4 +35,7 @@ export * from './scheduler/scheduler.module';
 
 // Worker
 export * from './worker/worker.module';
-export * from './worker/worker.service'; 
+export * from './worker/worker.service';
+
+// 工具类
+export * from './common/utils/redis.utils'; 
