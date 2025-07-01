@@ -49,11 +49,20 @@ pnpm install
 # Redis 配置
 REDIS_HOST=localhost
 REDIS_PORT=6379
+REDIS_PASSWORD=your_redis_password  # 可选
+REDIS_DB=0  # 可选，默认为 0
 
 # 应用配置
 APP_ROLE=BOTH          # SCHEDULER | WORKER | BOTH
 MAX_BATCH_SIZE=5       # Worker 最大批次大小
 PORT=3000              # 应用端口
+
+# 其他队列配置（可选）
+PENDING_QUEUE_NAME=pending-tasks
+WORKER_QUEUE_PREFIX=worker-queue
+WORKER_STATE_PREFIX=worker-state
+DEFAULT_MAX_BATCH_SIZE=10
+SCHEDULER_INTERVAL=1000
 ```
 
 ### 3. 启动 Redis
@@ -243,7 +252,14 @@ done
 | `MAX_BATCH_SIZE` | `5` | Worker 最大批次大小 |
 | `REDIS_HOST` | `localhost` | Redis 主机地址 |
 | `REDIS_PORT` | `6379` | Redis 端口 |
+| `REDIS_PASSWORD` | `null` | Redis 密码 |
+| `REDIS_DB` | `0` | Redis 数据库编号 |
 | `PORT` | `3000` | 应用端口 |
+| `PENDING_QUEUE_NAME` | `pending-tasks` | 待处理队列名称 |
+| `WORKER_QUEUE_PREFIX` | `worker-queue` | Worker 队列前缀 |
+| `WORKER_STATE_PREFIX` | `worker-state` | Worker 状态前缀 |
+| `DEFAULT_MAX_BATCH_SIZE` | `10` | 默认最大批次大小 |
+| `SCHEDULER_INTERVAL` | `1000` | 调度器间隔时间 |
 
 ### 角色说明
 
@@ -260,7 +276,7 @@ done
 ```
 🚀 应用启动，角色: BOTH
 [SchedulerProcessor] 调度器已启动
-[WorkerProcessor] Worker worker-0-1234567890 已启动
+[DynamicWorkerProcessor] Worker worker-0-1234567890 已启动
 [TaskHandlerService] 所有任务处理器已注册
 ```
 

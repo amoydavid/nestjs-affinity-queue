@@ -11,6 +11,7 @@
 - 🛡️ **类型安全**: 完整的 TypeScript 支持
 - 🔧 **高度可配置**: 灵活的配置选项
 - 🏭 **动态 Worker 管理**: 支持多 Worker 实例和动态处理器注册
+- 🏢 **多实例隔离**: 支持自定义队列前缀，同一 Redis 中运行多个独立队列实例
 
 ## 安装
 
@@ -35,12 +36,25 @@ import { QueueModule } from 'nestjs-affinity-queue';
       isGlobal: true,
     }),
     QueueModule.forRoot({
-      role: 'BOTH', // 'SCHEDULER' | 'WORKER' | 'BOTH'
-      workerOptions: {
-        maxBatchSize: 10,
-        workerCount: 1,
-      },
-    }),
+  role: 'BOTH', // 'SCHEDULER' | 'WORKER' | 'BOTH'
+  workerOptions: {
+    maxBatchSize: 10, // 单批次最大任务数
+    workerCount: 1, // worker数量
+  },
+  redisOptions: {
+    host: 'localhost',
+    port: 6379,
+    password: 'your-password', // 可选
+    db: 0, // 可选
+  },
+  queueOptions: {
+    // 自定义队列前缀，支持多实例隔离
+    pendingQueueName: 'my-app-pending-tasks',
+    workerQueuePrefix: 'my-app-worker-queue',
+    workerStatePrefix: 'my-app-worker-state',
+    schedulerInterval: 1000, // 毫秒
+  },
+}),
   ],
 })
 export class AppModule {}
@@ -118,7 +132,32 @@ export class TaskHandlerService implements OnModuleInit {
 
 ## 配置
 
-### 环境变量
+### 推荐配置方式（通过参数传入）
+
+```typescript
+QueueModule.forRoot({
+  role: 'BOTH',
+  workerOptions: {
+    maxBatchSize: 10,
+    workerCount: 1,
+  },
+  redisOptions: {
+    host: 'localhost',
+    port: 6379,
+    password: 'your-password', // 可选
+    db: 0, // 可选
+  },
+  queueOptions: {
+    // 自定义队列前缀，支持多实例隔离
+    pendingQueueName: 'my-app-pending-tasks',
+    workerQueuePrefix: 'my-app-worker-queue', 
+    workerStatePrefix: 'my-app-worker-state',
+    schedulerInterval: 1000, // 毫秒
+  },
+})
+```
+
+### 环境变量配置（可选）
 
 ```bash
 # Redis 配置
@@ -172,6 +211,32 @@ module.exports = {
 };
 ```
 
+### 多实例隔离示例
+
+如果你有多个应用实例需要在同一个 Redis 中运行，可以通过自定义队列前缀来隔离：
+
+```typescript
+// 应用 A
+QueueModule.forRoot({
+  role: 'BOTH',
+  queueOptions: {
+    pendingQueueName: 'app-a-pending-tasks',
+    workerQueuePrefix: 'app-a-worker-queue',
+    workerStatePrefix: 'app-a-worker-state',
+  },
+})
+
+// 应用 B  
+QueueModule.forRoot({
+  role: 'BOTH',
+  queueOptions: {
+    pendingQueueName: 'app-b-pending-tasks',
+    workerQueuePrefix: 'app-b-worker-queue',
+    workerStatePrefix: 'app-b-worker-state',
+  },
+})
+```
+
 ## 核心概念
 
 ### 强制亲和性
@@ -223,6 +288,18 @@ interface QueueModuleOptions {
   workerOptions?: {
     maxBatchSize?: number;
     workerCount?: number;
+  };
+  redisOptions?: {
+    host?: string;
+    port?: number;
+    password?: string;
+    db?: number;
+  };
+  queueOptions?: {
+    pendingQueueName?: string;
+    workerQueuePrefix?: string;
+    workerStatePrefix?: string;
+    schedulerInterval?: number;
   };
 }
 ```

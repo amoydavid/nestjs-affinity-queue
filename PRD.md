@@ -2,7 +2,7 @@
 
 - **文档版本**: 1.1
 - **更新日期**: 2025 年 6 月 30 日
-- **作者**: David & Google Gemini
+- **作者**: amoydavid & Google Gemini
 - **状态**: 定稿
 
 ### 1. 引言

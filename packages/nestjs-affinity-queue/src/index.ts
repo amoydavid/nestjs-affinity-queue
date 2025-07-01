@@ -1,5 +1,6 @@
 // 主模块
-export { QueueModule, QueueModuleOptions } from './queue.module';
+export { QueueModule } from './queue.module';
+export type { QueueModuleOptions } from './queue.module';
 
 // 服务
 export { QueueService } from './queue.service';
@@ -16,7 +17,6 @@ export * from './config/config';
 // 子模块（供高级用户使用）
 export { SchedulerModule } from './scheduler/scheduler.module';
 export { WorkerModule } from './worker/worker.module';
-export { WorkerProcessor } from './worker/worker.processor';
 export { SchedulerProcessor } from './scheduler/scheduler.processor';
 
 // 通用接口和 DTO
@@ -33,6 +33,5 @@ export * from './scheduler/scheduler.processor';
 export * from './scheduler/scheduler.module';
 
 // Worker
-export * from './worker/worker.processor';
 export * from './worker/worker.module';
 export * from './worker/worker.service'; 

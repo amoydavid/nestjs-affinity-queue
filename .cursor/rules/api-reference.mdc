@@ -105,17 +105,23 @@ interface QueueModuleOptions {
 
 ### 自定义任务处理器
 ```typescript
-import { WorkerProcessor } from 'nestjs-affinity-queue';
+import { WorkerService } from 'nestjs-affinity-queue';
 
 @Injectable()
-export class MyTaskHandler {
-  @WorkerProcessor('send-email')
+export class MyTaskHandler implements OnModuleInit {
+  constructor(private readonly workerService: WorkerService) {}
+
+  async onModuleInit() {
+    // 注册任务处理器
+    this.workerService.registerHandler('send-email', this.handleSendEmail.bind(this));
+    this.workerService.registerHandler('generate-report', this.handleGenerateReport.bind(this));
+  }
+
   async handleSendEmail(payload: any): Promise<void> {
     // 处理发送邮件任务
     console.log('发送邮件:', payload);
   }
 
-  @WorkerProcessor('generate-report')
   async handleGenerateReport(payload: any): Promise<void> {
     // 处理生成报告任务
     console.log('生成报告:', payload);
@@ -142,7 +148,6 @@ const pendingCount = await queueService.getPendingCount();
 ### 任务失败处理
 ```typescript
 // 任务处理器中的错误处理
-@WorkerProcessor('my-task')
 async handleTask(payload: any): Promise<void> {
   try {
     // 任务处理逻辑

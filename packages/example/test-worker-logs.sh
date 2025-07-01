@@ -81,11 +81,11 @@ test_worker_startup() {
     
     # 检查应用日志中是否有 Worker 启动信息
     log_info "请检查应用启动日志中是否包含以下信息："
-    log_info "- [WorkerProcessor] Worker worker-0-xxxxxxxxx 已启动"
+    log_info "- [DynamicWorkerProcessor] Worker worker-0-xxxxxxxxx 已启动"
     log_info "- [TaskHandlerService] 所有任务处理器已注册"
-    log_info "- [WorkerProcessor] 已注册任务处理器: send-email"
-    log_info "- [WorkerProcessor] 已注册任务处理器: generate-invoice"
-    log_info "- [WorkerProcessor] 已注册任务处理器: process-data"
+    log_info "- [DynamicWorkerProcessor] 已注册任务处理器: send-email"
+    log_info "- [DynamicWorkerProcessor] 已注册任务处理器: generate-invoice"
+    log_info "- [DynamicWorkerProcessor] 已注册任务处理器: process-data"
 }
 
 # 测试任务处理日志
