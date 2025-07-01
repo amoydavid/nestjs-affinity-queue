@@ -15,6 +15,9 @@
 - 🔄 **系统重启恢复**: 自动恢复系统重启后的孤儿任务
 - 🧹 **状态清理**: 自动清理过期的 Worker 状态
 - ⚡ **性能优化**: 使用 Redis SCAN 命令避免阻塞
+- 👑 **分布式选举**: 支持多节点自动选举调度器领导者
+- 🔄 **自动故障转移**: 领导者失效时自动切换
+- 🌐 **跨节点部署**: 支持跨服务器和跨实例的任务分配
 
 ## 安装
 
@@ -56,6 +59,12 @@ import { QueueModule } from 'nestjs-affinity-queue';
     workerQueuePrefix: 'my-app-worker-queue',
     workerStatePrefix: 'my-app-worker-state',
     schedulerInterval: 1000, // 毫秒
+  },
+  electionOptions: {
+    // 选举配置（可选）
+    electionLockTtl: 30000,    // 选举锁过期时间（毫秒）
+    heartbeatInterval: 10000,  // 心跳间隔（毫秒）
+    heartbeatTimeout: 60000,   // 心跳超时时间（毫秒）
   },
 }),
   ],
@@ -182,6 +191,11 @@ SCHEDULER_INTERVAL=1000
 
 # 应用角色
 APP_ROLE=BOTH  # SCHEDULER | WORKER | BOTH
+
+# 选举配置（可选）
+ELECTION_LOCK_TTL=30000
+HEARTBEAT_INTERVAL=10000
+HEARTBEAT_TIMEOUT=60000
 ```
 
 ### PM2 集群部署
@@ -304,6 +318,11 @@ interface QueueModuleOptions {
     workerStatePrefix?: string;
     schedulerInterval?: number;
   };
+  electionOptions?: {
+    electionLockTtl?: number;    // 选举锁过期时间（毫秒）
+    heartbeatInterval?: number;  // 心跳间隔（毫秒）
+    heartbeatTimeout?: number;   // 心跳超时时间（毫秒）
+  };
 }
 ```
 
@@ -379,6 +398,55 @@ export class AppService {
   }
 }
 ```
+
+## 分布式选举功能
+
+### 概述
+
+当所有节点都以 `BOTH` 模式运行时，系统会自动选举出一个节点作为调度器领导者，其他节点仅作为工作节点运行。这支持跨节点和跨服务器的任务分配。
+
+### 选举机制
+
+- **分布式锁**：使用 Redis 实现分布式锁确保只有一个领导者
+- **心跳机制**：领导者定期发送心跳，非领导者监控领导者状态
+- **自动故障转移**：当领导者失效时，其他节点自动接管
+
+### 使用方式
+
+```javascript
+// ecosystem-election.config.js
+module.exports = {
+  apps: [
+    {
+      name: 'affinity-queue-election',
+      script: 'dist/main.js',
+      instances: -1, // 使用所有可用核心
+      exec_mode: 'cluster',
+      env: {
+        APP_ROLE: 'BOTH', // 所有实例都是 BOTH 模式
+        ELECTION_LOCK_TTL: '30000',
+        HEARTBEAT_INTERVAL: '10000',
+        HEARTBEAT_TIMEOUT: '60000',
+      },
+    },
+  ],
+};
+```
+
+### 监控选举状态
+
+```bash
+# 检查当前领导者
+redis-cli get scheduler:leader:info | jq
+
+# 检查注册的 Worker
+redis-cli hgetall scheduler:worker:registry
+
+# 检查选举锁
+redis-cli get scheduler:election:lock
+```
+
+详细说明请参考 [ELECTION.md](./ELECTION.md)。
 
 ## 系统重启恢复
 

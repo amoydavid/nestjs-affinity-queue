@@ -21,6 +21,8 @@ export class DynamicWorkerProcessor extends WorkerHost {
   constructor(
     @Inject(queueConfig.KEY)
     private readonly config: ConfigType<typeof queueConfig>,
+    @Inject('REDIS_OPTIONS')
+    private readonly redisOptions: any,
   ) {
     super();
     this.workerId = this.generateWorkerId();
@@ -28,8 +30,23 @@ export class DynamicWorkerProcessor extends WorkerHost {
   }
 
   async onModuleInit() {
-    // 初始化 Redis 连接
-    this.redis = new Redis(this.config.redisUrl);
+    // 初始化 Redis 连接 - 使用统一的配置
+    const connection: any = {
+      host: this.redisOptions.host || this.config.redisHost,
+      port: this.redisOptions.port || this.config.redisPort,
+    };
+
+    // 只有当密码存在时才添加到连接配置中
+    if (this.redisOptions.password) {
+      connection.password = this.redisOptions.password;
+    }
+
+    // 只有当 db 存在且不为 0 时才添加到连接配置中
+    if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
+      connection.db = this.redisOptions.db;
+    }
+
+    this.redis = new Redis(connection);
     
     // 初始化 Worker 状态
     await this.initializeWorkerState();
@@ -261,6 +278,8 @@ export class WorkerFactory {
   constructor(
     @Inject(queueConfig.KEY)
     private readonly config: ConfigType<typeof queueConfig>,
+    @Inject('REDIS_OPTIONS')
+    private readonly redisOptions: any,
   ) {}
 
   /**
@@ -286,7 +305,7 @@ export class WorkerFactory {
     }
 
     // 创建新的 Worker 实例
-    const worker = new DynamicWorkerProcessor(this.config);
+    const worker = new DynamicWorkerProcessor(this.config, this.redisOptions);
     
     // 设置最大批次大小
     if (maxBatchSize) {

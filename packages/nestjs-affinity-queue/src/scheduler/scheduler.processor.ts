@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Inject, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
 import { Queue, Job } from 'bullmq';
 import { Redis } from 'ioredis';
@@ -6,19 +6,40 @@ import { Task } from '../common/interfaces/task.interface';
 import { WorkerState } from '../common/interfaces/worker-state.interface';
 import { RedisUtils } from '../common/utils/redis.utils';
 import { queueConfig } from '../config/config';
+import { SchedulerElectionService } from './scheduler.election';
 
 @Injectable()
-export class SchedulerProcessor implements OnModuleInit {
+export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerProcessor.name);
   private redis: Redis;
   private schedulerInterval: NodeJS.Timeout;
   private pendingQueue: Queue;
+  private cleanupInterval: NodeJS.Timeout;
 
   constructor(
     @Inject(queueConfig.KEY)
     private readonly config: ConfigType<typeof queueConfig>,
+    private readonly electionService: SchedulerElectionService,
+    @Inject('REDIS_OPTIONS')
+    private readonly redisOptions: any,
   ) {
-    this.redis = new Redis(this.config.redisUrl);
+    // 使用与 queue.module.ts 相同的 Redis 连接配置
+    const connection: any = {
+      host: this.redisOptions.host || this.config.redisHost,
+      port: this.redisOptions.port || this.config.redisPort,
+    };
+
+    // 只有当密码存在时才添加到连接配置中
+    if (this.redisOptions.password) {
+      connection.password = this.redisOptions.password;
+    }
+
+    // 只有当 db 存在且不为 0 时才添加到连接配置中
+    if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
+      connection.db = this.redisOptions.db;
+    }
+
+    this.redis = new Redis(connection);
     // 动态创建队列实例
     this.pendingQueue = new Queue(this.config.pendingQueueName, {
       connection: this.redis,
@@ -26,13 +47,26 @@ export class SchedulerProcessor implements OnModuleInit {
   }
 
   async onModuleInit() {
-    // 恢复孤儿任务
-    await this.recoverOrphanedTasks();
+    // 等待选举服务初始化
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
-    // 开始调度循环
-    this.startScheduling();
-    
-    this.logger.log('调度器已启动');
+    // 只有当选为领导者时才启动调度功能
+    if (this.electionService.isCurrentNodeLeader()) {
+      this.logger.log('当前节点为调度器领导者，启动调度功能');
+      
+      // 恢复孤儿任务
+      await this.recoverOrphanedTasks();
+      
+      // 开始调度循环
+      this.startScheduling();
+      
+      // 启动清理过期 Worker 的定时任务
+      this.startCleanupTask();
+      
+      this.logger.log('调度器已启动');
+    } else {
+      this.logger.log('当前节点不是调度器领导者，仅作为 Worker 运行');
+    }
   }
 
   /**
@@ -137,11 +171,29 @@ export class SchedulerProcessor implements OnModuleInit {
   private startScheduling() {
     this.schedulerInterval = setInterval(async () => {
       try {
-        await this.processScheduling();
+        // 只有领导者才执行调度
+        if (this.electionService.isCurrentNodeLeader()) {
+          await this.processScheduling();
+        }
       } catch (error) {
         this.logger.error('调度过程中发生错误:', error);
       }
     }, this.config.schedulerInterval);
+  }
+
+  /**
+   * 启动清理过期 Worker 的定时任务
+   */
+  private startCleanupTask() {
+    this.cleanupInterval = setInterval(async () => {
+      try {
+        if (this.electionService.isCurrentNodeLeader()) {
+          await this.electionService.cleanupExpiredWorkers();
+        }
+      } catch (error) {
+        this.logger.error('清理过期 Worker 时发生错误:', error);
+      }
+    }, 30000); // 每30秒清理一次
   }
 
   /**
@@ -308,6 +360,10 @@ export class SchedulerProcessor implements OnModuleInit {
   async onModuleDestroy() {
     if (this.schedulerInterval) {
       clearInterval(this.schedulerInterval);
+    }
+    
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
     }
     
     if (this.redis) {

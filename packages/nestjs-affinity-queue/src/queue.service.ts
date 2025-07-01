@@ -14,8 +14,26 @@ export class QueueService {
   constructor(
     @Inject(queueConfig.KEY)
     private readonly config: ConfigType<typeof queueConfig>,
+    @Inject('REDIS_OPTIONS')
+    private readonly redisOptions: any,
   ) {
-    this.redis = new Redis(this.config.redisUrl);
+    // 使用与 queue.module.ts 相同的 Redis 连接配置
+    const connection: any = {
+      host: this.redisOptions.host || this.config.redisHost,
+      port: this.redisOptions.port || this.config.redisPort,
+    };
+
+    // 只有当密码存在时才添加到连接配置中
+    if (this.redisOptions.password) {
+      connection.password = this.redisOptions.password;
+    }
+
+    // 只有当 db 存在且不为 0 时才添加到连接配置中
+    if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
+      connection.db = this.redisOptions.db;
+    }
+
+    this.redis = new Redis(connection);
     // 动态创建队列实例
     this.pendingQueue = new Queue(this.config.pendingQueueName, {
       connection: this.redis,

@@ -30,6 +30,12 @@ import { TaskHandlerService } from './task-handler.service';
         workerStatePrefix: process.env.WORKER_STATE_PREFIX || 'my-app-worker-state',
         schedulerInterval: parseInt(process.env.SCHEDULER_INTERVAL || '1000', 10),
       },
+      electionOptions: {
+        // 选举配置
+        electionLockTtl: parseInt(process.env.ELECTION_LOCK_TTL || '30000', 10),
+        heartbeatInterval: parseInt(process.env.HEARTBEAT_INTERVAL || '10000', 10),
+        heartbeatTimeout: parseInt(process.env.HEARTBEAT_TIMEOUT || '60000', 10),
+      },
     }),
   ],
   controllers: [AppController],

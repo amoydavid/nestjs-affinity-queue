@@ -19,6 +19,7 @@ export * from './config/config';
 export { SchedulerModule } from './scheduler/scheduler.module';
 export { WorkerModule } from './worker/worker.module';
 export { SchedulerProcessor } from './scheduler/scheduler.processor';
+export { SchedulerElectionService } from './scheduler/scheduler.election';
 
 // 通用接口和 DTO
 export * from './common/interfaces/task.interface';

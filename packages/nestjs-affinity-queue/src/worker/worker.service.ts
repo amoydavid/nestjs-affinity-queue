@@ -6,6 +6,7 @@ import { Task } from '../common/interfaces/task.interface';
 import { WorkerState } from '../common/interfaces/worker-state.interface';
 import { RedisUtils } from '../common/utils/redis.utils';
 import { queueConfig } from '../config/config';
+import { SchedulerElectionService } from '../scheduler/scheduler.election';
 
 /**
  * Worker 服务
@@ -22,8 +23,27 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(queueConfig.KEY)
     private readonly config: ConfigType<typeof queueConfig>,
+    private readonly electionService: SchedulerElectionService,
+    @Inject('REDIS_OPTIONS')
+    private readonly redisOptions: any,
   ) {
-    this.redis = new Redis(this.config.redisUrl);
+    // 使用与 queue.module.ts 相同的 Redis 连接配置
+    const connection: any = {
+      host: this.redisOptions.host || this.config.redisHost,
+      port: this.redisOptions.port || this.config.redisPort,
+    };
+
+    // 只有当密码存在时才添加到连接配置中
+    if (this.redisOptions.password) {
+      connection.password = this.redisOptions.password;
+    }
+
+    // 只有当 db 存在且不为 0 时才添加到连接配置中
+    if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
+      connection.db = this.redisOptions.db;
+    }
+
+    this.redis = new Redis(connection);
   }
 
   async onModuleInit() {
@@ -34,7 +54,19 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
     
     // 创建默认的 Worker 实例
     const workerCount = parseInt(process.env.WORKER_COUNT || '1', 10);
-    await this.createWorkers(workerCount);
+    const workerIds = await this.createWorkers(workerCount);
+    
+    // 注册所有 Worker 到选举服务
+    for (const workerId of workerIds) {
+      await this.electionService.registerWorker(workerId, {
+        hostname: require('os').hostname(),
+        processId: process.pid,
+        nodeId: this.electionService.getCurrentNodeId(),
+      });
+    }
+    
+    // 启动 Worker 心跳
+    this.startWorkerHeartbeat(workerIds);
   }
 
   /**
@@ -136,6 +168,21 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
     const processId = process.pid;
     const hostname = require('os').hostname().replace(/[^a-zA-Z0-9]/g, '');
     return `worker-${hostname}-${processId}-${index}`;
+  }
+
+  /**
+   * 启动 Worker 心跳
+   */
+  private startWorkerHeartbeat(workerIds: string[]) {
+    setInterval(async () => {
+      try {
+        for (const workerId of workerIds) {
+          await this.electionService.updateWorkerHeartbeat(workerId);
+        }
+      } catch (error) {
+        this.logger.error('更新 Worker 心跳时发生错误:', error);
+      }
+    }, 10000); // 每10秒更新一次心跳
   }
 
   /**

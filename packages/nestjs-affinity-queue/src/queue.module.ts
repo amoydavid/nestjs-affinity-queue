@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { QueueService } from './queue.service';
 import { SchedulerProcessor } from './scheduler/scheduler.processor';
+import { SchedulerElectionService } from './scheduler/scheduler.election';
 import { WorkerService } from './worker/worker.service';
 import { queueConfig } from './config/config';
 
@@ -51,12 +52,30 @@ export interface QueueModuleOptions {
      */
     schedulerInterval?: number;
   };
+
+  /**
+   * 选举配置选项
+   */
+  electionOptions?: {
+    /**
+     * 选举锁的过期时间（毫秒）
+     */
+    electionLockTtl?: number;
+    /**
+     * 心跳间隔（毫秒）
+     */
+    heartbeatInterval?: number;
+    /**
+     * 心跳超时时间（毫秒）
+     */
+    heartbeatTimeout?: number;
+  };
 }
 
 @Module({})
 export class QueueModule {
   static forRoot(options: QueueModuleOptions): DynamicModule {
-    const { role, workerOptions = {}, redisOptions = {}, queueOptions = {} } = options;
+    const { role, workerOptions = {}, redisOptions = {}, queueOptions = {}, electionOptions = {} } = options;
     const { maxBatchSize = 10, workerCount = 1 } = workerOptions;
     const { 
       host = 'localhost', 
@@ -112,6 +131,13 @@ export class QueueModule {
 
     const providers: any[] = [];
     const exportsList: any[] = [];
+
+    // 选举服务在所有模式下都需要
+    providers.push(SchedulerElectionService);
+    providers.push({
+      provide: 'ELECTION_OPTIONS',
+      useValue: electionOptions,
+    });
 
     // 根据角色添加不同的服务和模块
     if (role === 'SCHEDULER' || role === 'BOTH') {
