@@ -41,6 +41,8 @@ export class WorkerManager implements OnModuleInit, OnModuleDestroy {
       connection.db = this.redisOptions.db;
     }
 
+    connection.maxRetriesPerRequest = null;
+
     this.redis = new Redis(connection);
     this.workerFactory = new WorkerFactory(this.config, this.redisOptions);
   }

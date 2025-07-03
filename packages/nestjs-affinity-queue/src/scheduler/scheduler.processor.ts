@@ -39,6 +39,8 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
       connection.db = this.redisOptions.db;
     }
 
+    connection.maxRetriesPerRequest = null;
+
     this.redis = new Redis(connection);
     // 动态创建队列实例
     this.pendingQueue = new Queue(this.config.pendingQueueName, {

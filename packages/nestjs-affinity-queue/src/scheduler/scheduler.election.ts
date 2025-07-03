@@ -61,6 +61,8 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
       connection.db = this.redisOptions.db;
     }
 
+    connection.maxRetriesPerRequest = null;
+
     this.redis = new Redis(connection);
     this.nodeId = this.generateNodeId();
     this.prefix = this.config.workerQueuePrefix || 'worker-queue';

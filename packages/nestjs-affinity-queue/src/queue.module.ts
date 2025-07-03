@@ -123,6 +123,8 @@ export class QueueModule {
             connection.db = db;
           }
 
+          connection.maxRetriesPerRequest = null;
+
           return { connection };
         },
         inject: [ConfigService],

@@ -46,6 +46,8 @@ export class DynamicWorkerProcessor extends WorkerHost {
       connection.db = this.redisOptions.db;
     }
 
+    connection.maxRetriesPerRequest = null;
+
     this.redis = new Redis(connection);
     
     // 初始化 Worker 状态

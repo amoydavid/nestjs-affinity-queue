@@ -43,6 +43,8 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
       connection.db = this.redisOptions.db;
     }
 
+    connection.maxRetriesPerRequest = null;
+
     this.redis = new Redis(connection);
   }
 
