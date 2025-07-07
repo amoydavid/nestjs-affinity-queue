@@ -1,12 +1,11 @@
 import { Injectable, Inject, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { ConfigType } from '@nestjs/config';
-import { Queue, Worker } from 'bullmq';
+import { Queue, Worker, Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { Task } from '../common/interfaces/task.interface';
 import { WorkerState } from '../common/interfaces/worker-state.interface';
 import { RedisUtils } from '../common/utils/redis.utils';
-import { queueConfig } from '../config/config';
 import { SchedulerElectionService } from '../scheduler/scheduler.election';
+import { QueueModuleOptions } from '../queue.module';
 
 /**
  * Worker 服务
@@ -14,51 +13,32 @@ import { SchedulerElectionService } from '../scheduler/scheduler.election';
  */
 @Injectable()
 export class WorkerService implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(WorkerService.name);
+  private readonly logger: Logger;
   private redis: Redis;
   private workers: Map<string, Worker> = new Map();
   private taskHandlers: Map<string, (payload: any) => Promise<any>> = new Map();
   private workerStates: Map<string, WorkerState> = new Map();
+  private heartbeatInterval: NodeJS.Timeout;
 
   constructor(
-    @Inject(queueConfig.KEY)
-    private readonly config: ConfigType<typeof queueConfig>,
+    @Inject('QUEUE_OPTIONS') private readonly options: QueueModuleOptions,
     private readonly electionService: SchedulerElectionService,
-    @Inject('REDIS_OPTIONS')
-    private readonly redisOptions: any,
   ) {
-    // 使用与 queue.module.ts 相同的 Redis 连接配置
-    const connection: any = {
-      host: this.redisOptions.host || this.config.redisHost,
-      port: this.redisOptions.port || this.config.redisPort,
-    };
-
-    // 只有当密码存在时才添加到连接配置中
-    if (this.redisOptions.password) {
-      connection.password = this.redisOptions.password;
-    }
-
-    // 只有当 db 存在且不为 0 时才添加到连接配置中
-    if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
-      connection.db = this.redisOptions.db;
-    }
-
-    connection.maxRetriesPerRequest = null;
-
-    this.redis = new Redis(connection);
+    this.logger = new Logger(`${WorkerService.name}:${this.options.name || 'default'}`);
+    // Since BullMQ instances share redis connections, we can get it from the election service
+    // which is guaranteed to have one.
+    this.redis = electionService.getRedisClient();
+    this.logger.log(`WorkerService for "${this.options.name || 'default'}" initialized.`);
   }
 
   async onModuleInit() {
-    this.logger.log('WorkerService 已初始化');
+    this.logger.log('WorkerService initializing...');
     
-    // 清理过期的 Worker 状态
     await this.cleanupExpiredWorkerStates();
     
-    // 创建默认的 Worker 实例
-    const workerCount = parseInt(process.env.WORKER_COUNT || '1', 10);
+    const workerCount = this.options.workerOptions?.workerCount || 1;
     const workerIds = await this.createWorkers(workerCount);
     
-    // 注册所有 Worker 到选举服务
     for (const workerId of workerIds) {
       await this.electionService.registerWorker(workerId, {
         hostname: require('os').hostname(),
@@ -67,7 +47,6 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
       });
     }
     
-    // 启动 Worker 心跳
     this.startWorkerHeartbeat(workerIds);
   }
 
@@ -78,23 +57,21 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
    */
   registerHandler(taskType: string, handler: (payload: any) => Promise<any>): void {
     this.taskHandlers.set(taskType, handler);
-    this.logger.log(`WorkerService 已注册任务处理器: ${taskType}`);
+    this.logger.log(`Task handler registered for type: ${taskType}`);
   }
 
   /**
    * 创建 Worker 实例
    * @param workerId Worker ID
-   * @param maxBatchSize 最大批次大小
    * @returns Worker ID
    */
-  async createWorker(workerId: string, maxBatchSize: number = 10): Promise<string> {
+  async createWorker(workerId: string): Promise<string> {
     if (this.workers.has(workerId)) {
-      this.logger.warn(`Worker ${workerId} 已存在`);
+      this.logger.warn(`Worker ${workerId} already exists.`);
       return workerId;
     }
 
     try {
-      // 初始化 Worker 状态
       const state: WorkerState = {
         workerId,
         status: 'idle',
@@ -104,38 +81,36 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
       this.workerStates.set(workerId, state);
       await this.updateWorkerState(workerId, state);
 
-      // 创建 BullMQ Worker
-      const queueName = `${this.config.workerQueuePrefix}-${workerId}`;
+      const queueName = `${this.options.queueOptions.workerQueuePrefix}-${workerId}`;
       const worker = new Worker(
         queueName,
         async (job) => {
-          return await this.processJob(job, workerId, maxBatchSize);
+          return await this.processJob(job, workerId);
         },
         {
           connection: this.redis,
-          concurrency: 1, // 每个 Worker 一次只处理一个任务
+          concurrency: 1, 
         }
       );
 
-      // 设置事件监听器
       worker.on('completed', async (job) => {
-        await this.onJobCompleted(job, workerId, maxBatchSize);
+        await this.onJobCompleted(job, workerId);
       });
 
       worker.on('failed', async (job, error) => {
-        await this.onJobFailed(job, error, workerId, maxBatchSize);
+        await this.onJobFailed(job, error, workerId);
       });
 
       worker.on('error', (error) => {
-        this.logger.error(`Worker ${workerId} 发生错误:`, error);
+        this.logger.error(`Worker ${workerId} encountered an error:`, error);
       });
 
       this.workers.set(workerId, worker);
-      this.logger.log(`WorkerService 创建了 Worker: ${workerId}, 队列: ${queueName}`);
+      this.logger.log(`Worker created: ${workerId}, listening on queue: ${queueName}`);
 
       return workerId;
     } catch (error) {
-      this.logger.error(`创建 Worker ${workerId} 失败:`, error);
+      this.logger.error(`Failed to create worker ${workerId}:`, error);
       throw error;
     }
   }
@@ -143,20 +118,18 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   /**
    * 创建多个 Worker 实例
    * @param count Worker 数量
-   * @param maxBatchSize 最大批次大小
    * @returns Worker ID 数组
    */
-  async createWorkers(count: number, maxBatchSize: number = 10): Promise<string[]> {
+  async createWorkers(count: number): Promise<string[]> {
     const workerIds: string[] = [];
     
     for (let i = 0; i < count; i++) {
-      // 使用稳定的 Worker ID 生成策略
       const workerId = this.generateStableWorkerId(i);
-      await this.createWorker(workerId, maxBatchSize);
+      await this.createWorker(workerId);
       workerIds.push(workerId);
     }
 
-    this.logger.log(`WorkerService 创建了 ${count} 个 Worker: ${workerIds.join(', ')}`);
+    this.logger.log(`${count} workers created: ${workerIds.join(', ')}`);
     return workerIds;
   }
 
@@ -176,13 +149,13 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
    * 启动 Worker 心跳
    */
   private startWorkerHeartbeat(workerIds: string[]) {
-    setInterval(async () => {
+    this.heartbeatInterval = setInterval(async () => {
       try {
         for (const workerId of workerIds) {
           await this.electionService.updateWorkerHeartbeat(workerId);
         }
       } catch (error) {
-        this.logger.error('更新 Worker 心跳时发生错误:', error);
+        this.logger.error('Failed to update worker heartbeat:', error);
       }
     }, 10000); // 每10秒更新一次心跳
   }
@@ -193,9 +166,9 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
    */
   async cleanupExpiredWorkerStates(): Promise<void> {
     try {
-      this.logger.log('开始清理过期的 Worker 状态...');
+      this.logger.log('Cleaning up expired worker states...');
       
-      const pattern = `${this.config.workerStatePrefix}:*`;
+      const pattern = `${this.options.queueOptions.workerStatePrefix}:*`;
       const keys = await RedisUtils.scanKeys(this.redis, pattern);
       
       let cleanedCount = 0;
@@ -204,57 +177,52 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
         try {
           const data = await this.redis.hgetall(key);
           if (data && data.workerId) {
-            // 检查该 Worker 是否仍然存在
             const workerExists = this.workers.has(data.workerId);
             
             if (!workerExists) {
-              // Worker 不存在，清理状态
               await this.redis.del(key);
               cleanedCount++;
-              this.logger.log(`清理了过期 Worker 状态: ${data.workerId}`);
+              this.logger.log(`Cleaned up expired worker state: ${data.workerId}`);
             }
           }
         } catch (error) {
-          this.logger.error(`清理 Worker 状态时发生错误 ${key}:`, error);
+          this.logger.error(`Error cleaning up worker state for key ${key}:`, error);
         }
       }
       
       if (cleanedCount > 0) {
-        this.logger.log(`成功清理了 ${cleanedCount} 个过期的 Worker 状态`);
+        this.logger.log(`Successfully cleaned up ${cleanedCount} expired worker states.`);
       } else {
-        this.logger.log('未发现需要清理的过期 Worker 状态');
+        this.logger.log('No expired worker states found to clean up.');
       }
     } catch (error) {
-      this.logger.error('清理过期 Worker 状态时发生错误:', error);
+      this.logger.error('An error occurred during expired worker state cleanup:', error);
     }
   }
 
   /**
    * 处理任务
    */
-  private async processJob(job: any, workerId: string, maxBatchSize: number): Promise<any> {
+  private async processJob(job: Job, workerId: string): Promise<any> {
     const task = job.data as Task;
-    this.logger.log(`Worker ${workerId} 开始处理任务: ${JSON.stringify(task)}`);
+    this.logger.log(`Worker ${workerId} started processing job: ${JSON.stringify(task)}`);
 
     try {
-      // 查找任务处理器
       const handler = this.taskHandlers.get(task.type);
       
       if (!handler) {
-        this.logger.error(`未找到任务类型 '${task.type}' 的处理器，可用处理器: ${Array.from(this.taskHandlers.keys()).join(', ')}`);
-        throw new Error(`未找到任务类型 '${task.type}' 的处理器`);
+        throw new Error(`No handler found for task type '${task.type}'. Available handlers: ${Array.from(this.taskHandlers.keys()).join(', ')}`);
       }
 
-      this.logger.log(`Worker ${workerId} 找到处理器，开始执行任务: ${task.type}`);
+      this.logger.log(`Worker ${workerId} found handler, executing task: ${task.type}`);
 
-      // 执行任务
       const result = await handler(task.payload);
       
-      this.logger.log(`Worker ${workerId} 完成任务 ${task.type}: ${task.identifyTag}, 结果: ${JSON.stringify(result)}`);
+      this.logger.log(`Worker ${workerId} finished task ${task.type}: ${task.identifyTag}, result: ${JSON.stringify(result)}`);
       
       return result;
     } catch (error) {
-      this.logger.error(`Worker ${workerId} 处理任务失败:`, error);
+      this.logger.error(`Worker ${workerId} failed to process job:`, error);
       throw error;
     }
   }
@@ -262,43 +230,40 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   /**
    * 任务完成后的处理
    */
-  private async onJobCompleted(job: any, workerId: string, maxBatchSize: number): Promise<void> {
+  private async onJobCompleted(job: Job, workerId: string): Promise<void> {
     const task = job.data as Task;
-    this.logger.log(`Worker ${workerId} 任务完成事件触发: ${job.id}, 任务类型: ${task.type}`);
+    this.logger.log(`Job completed event for worker ${workerId}: ${job.id}, task type: ${task.type}`);
     
-    // 获取当前状态
     const currentState = this.workerStates.get(workerId);
     
     if (currentState) {
-      this.logger.log(`Worker ${workerId} 当前状态: ${JSON.stringify(currentState)}`);
+      this.logger.log(`Current state for worker ${workerId}: ${JSON.stringify(currentState)}`);
       
-      // 检查是否应该重置状态
-      const shouldReset = await this.shouldResetWorkerState(workerId, currentState, maxBatchSize);
+      const shouldReset = await this.shouldResetWorkerState(workerId, currentState);
       
       if (shouldReset) {
         await this.resetWorkerState(workerId);
-        this.logger.log(`Worker ${workerId} 完成批次，状态已重置`);
+        this.logger.log(`Worker ${workerId} completed its batch and state has been reset.`);
       } else {
-        this.logger.log(`Worker ${workerId} 批次未完成，保持当前状态`);
+        this.logger.log(`Worker ${workerId} has not completed its batch, maintaining current state.`);
       }
     } else {
-      this.logger.warn(`Worker ${workerId} 无法获取当前状态`);
+      this.logger.warn(`Could not retrieve current state for worker ${workerId}`);
     }
   }
 
   /**
    * 任务失败后的处理
    */
-  private async onJobFailed(job: any, error: Error, workerId: string, maxBatchSize: number): Promise<void> {
-    this.logger.error(`Worker ${workerId} 任务失败 ${job.id}:`, error);
+  private async onJobFailed(job: Job, error: Error, workerId: string): Promise<void> {
+    this.logger.error(`Job failed for worker ${workerId}, job id ${job.id}:`, error);
     
-    // 任务失败也可能需要重置状态
     const currentState = this.workerStates.get(workerId);
     if (currentState) {
-      const shouldReset = await this.shouldResetWorkerState(workerId, currentState, maxBatchSize);
+      const shouldReset = await this.shouldResetWorkerState(workerId, currentState);
       if (shouldReset) {
         await this.resetWorkerState(workerId);
-        this.logger.log(`Worker ${workerId} 任务失败后状态已重置`);
+        this.logger.log(`Worker ${workerId} state has been reset after job failure.`);
       }
     }
   }
@@ -306,21 +271,22 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   /**
    * 判断是否应该重置 Worker 状态
    */
-  private async shouldResetWorkerState(workerId: string, state: WorkerState, maxBatchSize: number): Promise<boolean> {
-    // 如果达到最大批次大小，重置状态
+  private async shouldResetWorkerState(workerId: string, state: WorkerState): Promise<boolean> {
+    const maxBatchSize = this.options.workerOptions.maxBatchSize;
     if (state.currentBatchSize >= maxBatchSize) {
-      this.logger.log(`Worker ${workerId} 达到最大批次大小 ${maxBatchSize}，需要重置状态`);
+      this.logger.log(`Worker ${workerId} has reached its max batch size of ${maxBatchSize} and needs a state reset.`);
       return true;
     }
 
-    // 如果执行队列为空，重置状态
-    const queueName = `${this.config.workerQueuePrefix}-${workerId}`;
-    const waiting = await this.redis.llen(`bull:${queueName}:waiting`);
-    const active = await this.redis.llen(`bull:${queueName}:active`);
+    const queueName = `${this.options.queueOptions.workerQueuePrefix}-${workerId}`;
+    const queue = new Queue(queueName, { connection: this.redis });
+    const counts = await queue.getJobCounts('wait', 'active');
+    await queue.close();
+
+    const totalJobs = counts.wait + counts.active;
+    this.logger.log(`Worker ${workerId} queue status check: waiting=${counts.wait}, active=${counts.active}`);
     
-    this.logger.log(`Worker ${workerId} 队列状态检查: ${queueName}, 等待: ${waiting}, 活跃: ${active}`);
-    
-    return waiting === 0 && active === 0;
+    return totalJobs === 0;
   }
 
   /**
@@ -336,14 +302,14 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
 
     this.workerStates.set(workerId, state);
     await this.updateWorkerState(workerId, state);
-    this.logger.log(`Worker ${workerId} 状态已重置: ${JSON.stringify(state)}`);
+    this.logger.log(`Worker ${workerId} state has been reset: ${JSON.stringify(state)}`);
   }
 
   /**
    * 更新 Worker 状态
    */
   private async updateWorkerState(workerId: string, state: WorkerState): Promise<void> {
-    const key = `${this.config.workerStatePrefix}:${workerId}`;
+    const key = `${this.options.queueOptions.workerStatePrefix}:${workerId}`;
     
     const data = {
       workerId: state.workerId,
@@ -354,7 +320,7 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
     };
 
     await this.redis.hset(key, data);
-    this.logger.log(`Worker ${workerId} 状态已更新: ${JSON.stringify(data)}`);
+    this.logger.log(`Worker ${workerId} state updated: ${JSON.stringify(data)}`);
   }
 
   /**
@@ -375,7 +341,7 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
     for (const [workerId, worker] of this.workers) {
       status.push({
         workerId,
-        queueName: `${this.config.workerQueuePrefix}-${workerId}`,
+        queueName: `${this.options.queueOptions.workerQueuePrefix}-${workerId}`,
         status: worker.isRunning() ? 'running' : 'stopped',
       });
     }
@@ -384,19 +350,18 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    // 关闭所有 Worker
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+
     for (const [workerId, worker] of this.workers) {
       await worker.close();
-      this.logger.log(`WorkerService 关闭了 Worker: ${workerId}`);
+      this.logger.log(`Worker closed: ${workerId}`);
     }
     
     this.workers.clear();
     this.workerStates.clear();
     
-    if (this.redis) {
-      await this.redis.quit();
-    }
-    
-    this.logger.log('WorkerService 已销毁');
+    this.logger.log('WorkerService has been destroyed.');
   }
-} 
+}

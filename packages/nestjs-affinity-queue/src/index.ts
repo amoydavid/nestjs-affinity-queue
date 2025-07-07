@@ -1,42 +1,52 @@
-// 主模块
+/**
+ * =======================================================================
+ * Public API
+ * =======================================================================
+ * This file is the entry point for the nestjs-affinity-queue library.
+ * It exports all the necessary modules, services, interfaces, and functions
+ * for users to integrate and use the queueing system.
+ * =======================================================================
+ */
+
+// ==============================================
+//      PRIMARY MODULE AND CONFIGURATION
+// ==============================================
+
 export { QueueModule } from './queue.module';
 export type { QueueModuleOptions } from './queue.module';
 
-// 服务
+// ==============================================
+//      INJECTION TOKENS FOR FOR_FEATURE
+// ==============================================
+
+export {
+  getQueueServiceToken,
+  getWorkerServiceToken,
+  getSchedulerProcessorToken,
+  getQueueOptionsToken,
+} from './queue.module';
+
+
+// ==============================================
+//      CORE SERVICES
+// ==============================================
+
 export { QueueService } from './queue.service';
 export { WorkerService } from './worker/worker.service';
-export { WorkerManager } from './worker/worker.manager';
+export { SchedulerElectionService } from './scheduler/scheduler.election';
 
-// 接口和类型
+
+// ==============================================
+//      INTERFACES & DTOS
+// ==============================================
+
 export { Task } from './common/interfaces/task.interface';
 export { WorkerState } from './common/interfaces/worker-state.interface';
 export { TaskDto } from './common/dtos/task.dto';
 
-// 配置
-export * from './config/config';
 
-// 子模块（供高级用户使用）
-export { SchedulerModule } from './scheduler/scheduler.module';
-export { WorkerModule } from './worker/worker.module';
-export { SchedulerProcessor } from './scheduler/scheduler.processor';
-export { SchedulerElectionService } from './scheduler/scheduler.election';
+// ==============================================
+//      UTILITIES
+// ==============================================
 
-// 通用接口和 DTO
-export * from './common/interfaces/task.interface';
-export * from './common/interfaces/worker-state.interface';
-export * from './common/dtos/task.dto';
-
-// 核心服务
-export * from './queue.service';
-export * from './queue.module';
-
-// 调度器
-export * from './scheduler/scheduler.processor';
-export * from './scheduler/scheduler.module';
-
-// Worker
-export * from './worker/worker.module';
-export * from './worker/worker.service';
-
-// 工具类
-export * from './common/utils/redis.utils'; 
+export { RedisUtils } from './common/utils/redis.utils';

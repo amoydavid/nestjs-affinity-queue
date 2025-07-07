@@ -42,31 +42,59 @@ import { QueueModule } from 'nestjs-affinity-queue';
       isGlobal: true,
     }),
     QueueModule.forRoot({
-  role: 'BOTH', // 'SCHEDULER' | 'WORKER' | 'BOTH'
-  workerOptions: {
-    maxBatchSize: 10, // 单批次最大任务数
-    workerCount: 1, // worker数量
-  },
-  redisOptions: {
-    host: 'localhost',
-    port: 6379,
-    password: 'your-password', // 可选
-    db: 0, // 可选
-  },
-  queueOptions: {
-    // 自定义队列前缀，支持多实例隔离
-    pendingQueueName: 'my-app-pending-tasks',
-    workerQueuePrefix: 'my-app-worker-queue',
-    workerStatePrefix: 'my-app-worker-state',
-    schedulerInterval: 1000, // 毫秒
-  },
-  electionOptions: {
-    // 选举配置（可选）
-    electionLockTtl: 30000,    // 选举锁过期时间（毫秒）
-    heartbeatInterval: 10000,  // 心跳间隔（毫秒）
-    heartbeatTimeout: 60000,   // 心跳超时时间（毫秒）
-  },
-}),
+      role: 'BOTH', // 'SCHEDULER' | 'WORKER' | 'BOTH'
+      workerOptions: {
+        maxBatchSize: 10, // 单批次最大任务数
+        workerCount: 1, // worker数量
+      },
+      redisOptions: {
+        host: 'localhost',
+        port: 6379,
+        password: 'your-password', // 可选
+        db: 0, // 可选
+      },
+      queueOptions: {
+        // 自定义队列前缀，支持多实例隔离
+        pendingQueueName: 'my-app-pending-tasks',
+        workerQueuePrefix: 'my-app-worker-queue',
+        workerStatePrefix: 'my-app-worker-state',
+        schedulerInterval: 1000, // 毫秒
+      },
+      electionOptions: {
+        // 选举配置（可选）
+        electionLockTtl: 30000,    // 选举锁过期时间（毫秒）
+        heartbeatInterval: 10000,  // 心跳间隔（毫秒）
+        heartbeatTimeout: 60000,   // 心跳超时时间（毫秒）
+      },
+    }),
+    // 多队列配置演示
+    QueueModule.forFeature({
+      name: 'high-priority',
+      role: 'BOTH', // 'SCHEDULER' | 'WORKER' | 'BOTH'
+      workerOptions: {
+        maxBatchSize: 10, // 单批次最大任务数
+        workerCount: 1, // worker数量
+      },
+      redisOptions: {
+        host: 'localhost',
+        port: 6379,
+        password: 'your-password', // 可选
+        db: 0, // 可选
+      },
+      queueOptions: {
+        // 自定义队列前缀，支持多实例隔离
+        pendingQueueName: 'high-app-pending-tasks',
+        workerQueuePrefix: 'high-app-worker-queue',
+        workerStatePrefix: 'high-app-worker-state',
+        schedulerInterval: 1000, // 毫秒
+      },
+      electionOptions: {
+        // 选举配置（可选）
+        electionLockTtl: 30000,    // 选举锁过期时间（毫秒）
+        heartbeatInterval: 10000,  // 心跳间隔（毫秒）
+        heartbeatTimeout: 60000,   // 心跳超时时间（毫秒）
+      },
+    }),
   ],
 })
 export class AppModule {}
@@ -80,7 +108,13 @@ import { QueueService, Task } from 'nestjs-affinity-queue';
 
 @Injectable()
 export class TaskService {
-  constructor(private readonly queueService: QueueService) {}
+  constructor(
+    private readonly queueService: QueueService,
+
+    // 注入特定队列
+    @Inject(getQueueServiceToken('high-priority')) 
+    private readonly highPriorityQueueService: QueueService,
+  ) {}
 
   async addTask() {
     const task: Task = {
@@ -100,12 +134,17 @@ export class TaskService {
 ### 3. 注册任务处理器
 
 ```typescript
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { WorkerService } from 'nestjs-affinity-queue';
+import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
+import { WorkerService, getWorkerServiceToken } from 'nestjs-affinity-queue';
 
 @Injectable()
 export class TaskHandlerService implements OnModuleInit {
-  constructor(private readonly workerService: WorkerService) {}
+  constructor(
+    private readonly workerService: WorkerService,
+    @Optional()
+    @Inject(getWorkerServiceToken('high-priority')) 
+    private readonly highPriorityWorkerService: WorkerService,
+    ) {}
 
   async onModuleInit() {
     this.registerHandlers();
@@ -120,6 +159,8 @@ export class TaskHandlerService implements OnModuleInit {
     
     // 注册数据处理处理器
     this.workerService.registerHandler('process-data', this.handleProcessData.bind(this));
+
+    //对highPriorityWorkerService注册处理器
   }
 
   private async handleSendEmail(payload: any) {

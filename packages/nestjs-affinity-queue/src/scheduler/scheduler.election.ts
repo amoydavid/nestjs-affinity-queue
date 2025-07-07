@@ -1,7 +1,5 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/common';
-import { ConfigType } from '@nestjs/config';
 import { Redis } from 'ioredis';
-import { queueConfig } from '../config/config';
 
 export interface SchedulerElectionOptions {
   /**
@@ -30,33 +28,29 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
   private electionLockTtl: number;
   private heartbeatIntervalMs: number;
   private heartbeatTimeout: number;
-  private readonly prefix: string;
-  
+  private readonly prefix: string = 'affinity-queue:scheduler';
+
   // Redis 键名 getter
   private get ELECTION_LOCK_KEY() { return `${this.prefix}:election:lock`; }
   private get LEADER_INFO_KEY() { return `${this.prefix}:leader:info`; }
   private get WORKER_REGISTRY_KEY() { return `${this.prefix}:worker:registry`; }
 
   constructor(
-    @Inject(queueConfig.KEY)
-    private readonly config: ConfigType<typeof queueConfig>,
     @Inject('ELECTION_OPTIONS')
     private readonly options: SchedulerElectionOptions = {},
     @Inject('REDIS_OPTIONS')
     private readonly redisOptions: any,
   ) {
-    // 使用与 queue.module.ts 相同的 Redis 连接配置
+    // Use the same Redis connection settings as queue.module.ts
     const connection: any = {
-      host: this.redisOptions.host || this.config.redisHost,
-      port: this.redisOptions.port || this.config.redisPort,
+      host: this.redisOptions.host || 'localhost',
+      port: this.redisOptions.port || 6379,
     };
 
-    // 只有当密码存在时才添加到连接配置中
     if (this.redisOptions.password) {
       connection.password = this.redisOptions.password;
     }
 
-    // 只有当 db 存在且不为 0 时才添加到连接配置中
     if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
       connection.db = this.redisOptions.db;
     }
@@ -65,12 +59,11 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
 
     this.redis = new Redis(connection);
     this.nodeId = this.generateNodeId();
-    this.prefix = this.config.workerQueuePrefix || 'worker-queue';
     
-    // 设置默认值
-    this.electionLockTtl = options.electionLockTtl || 30000; // 30秒
-    this.heartbeatIntervalMs = options.heartbeatInterval || 10000; // 10秒
-    this.heartbeatTimeout = options.heartbeatTimeout || 60000; // 60秒
+    // Set default values
+    this.electionLockTtl = options.electionLockTtl || 30000; // 30 seconds
+    this.heartbeatIntervalMs = options.heartbeatInterval || 10000; // 10 seconds
+    this.heartbeatTimeout = options.heartbeatTimeout || 60000; // 60 seconds
   }
 
   async onModuleInit() {
@@ -344,6 +337,13 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
    */
   getCurrentNodeId(): string {
     return this.nodeId;
+  }
+
+  /**
+   * 获取 Redis 客户端实例
+   */
+  getRedisClient(): Redis {
+    return this.redis;
   }
 
   /**

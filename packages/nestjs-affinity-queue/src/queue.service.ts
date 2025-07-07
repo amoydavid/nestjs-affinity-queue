@@ -1,45 +1,19 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { ConfigType } from '@nestjs/config';
 import { Queue, Job } from 'bullmq';
-import { Redis } from 'ioredis';
 import { Task } from './common/interfaces/task.interface';
-import { queueConfig } from './config/config';
+import { QueueModuleOptions } from './queue.module';
 
 @Injectable()
 export class QueueService {
   private readonly logger = new Logger(QueueService.name);
-  private redis: Redis;
-  private pendingQueue: Queue;
 
   constructor(
-    @Inject(queueConfig.KEY)
-    private readonly config: ConfigType<typeof queueConfig>,
-    @Inject('REDIS_OPTIONS')
-    private readonly redisOptions: any,
+    // The options are now injected directly by a factory provider
+    @Inject('QUEUE_OPTIONS') private readonly options: QueueModuleOptions,
+    // The queue is also injected by the factory provider
+    private readonly pendingQueue: Queue,
   ) {
-    // 使用与 queue.module.ts 相同的 Redis 连接配置
-    const connection: any = {
-      host: this.redisOptions.host || this.config.redisHost,
-      port: this.redisOptions.port || this.config.redisPort,
-    };
-
-    // 只有当密码存在时才添加到连接配置中
-    if (this.redisOptions.password) {
-      connection.password = this.redisOptions.password;
-    }
-
-    // 只有当 db 存在且不为 0 时才添加到连接配置中
-    if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
-      connection.db = this.redisOptions.db;
-    }
-
-    connection.maxRetriesPerRequest = null;
-
-    this.redis = new Redis(connection);
-    // 动态创建队列实例
-    this.pendingQueue = new Queue(this.config.pendingQueueName, {
-      connection: this.redis,
-    });
+    this.logger.log(`QueueService for "${this.options.name || 'default'}" initialized with queue: ${this.pendingQueue.name}`);
   }
 
   /**
@@ -48,7 +22,7 @@ export class QueueService {
    * @returns Promise<Job> 返回 BullMQ Job 对象
    */
   async add(task: Task): Promise<Job> {
-    this.logger.log(`添加任务到待调度队列: ${JSON.stringify(task)}`);
+    this.logger.log(`Adding task to queue ${this.pendingQueue.name}: ${JSON.stringify(task)}`);
     
     const job = await this.pendingQueue.add(
       'pending-task',
@@ -65,7 +39,7 @@ export class QueueService {
       }
     );
 
-    this.logger.log(`任务已添加到待调度队列, Job ID: ${job.id}`);
+    this.logger.log(`Task added to queue ${this.pendingQueue.name}, Job ID: ${job.id}`);
     return job;
   }
 
@@ -92,4 +66,4 @@ export class QueueService {
   getQueue(): Queue {
     return this.pendingQueue;
   }
-} 
+}

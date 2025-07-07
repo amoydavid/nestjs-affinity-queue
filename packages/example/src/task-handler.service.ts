@@ -1,14 +1,33 @@
-import { Injectable, Logger, OnModuleInit, Inject } from '@nestjs/common';
-import { WorkerService } from 'nestjs-affinity-queue';
+import { Injectable, Logger, OnModuleInit, Inject, Optional } from '@nestjs/common';
+import { WorkerService, getWorkerServiceToken } from 'nestjs-affinity-queue';
 
 @Injectable()
 export class TaskHandlerService implements OnModuleInit {
   private readonly logger = new Logger(TaskHandlerService.name);
 
-  constructor(@Inject(WorkerService) private readonly workerService: WorkerService) {}
+  constructor(
+    // 注入默认的 WorkerService
+    private readonly defaultWorkerService: WorkerService,
+
+    // 注入名为 'high-priority' 的 WorkerService
+    // 使用 @Optional() 避免在某些配置下（如单独的 SCHEDULER）找不到 provider 而报错
+    @Optional()
+    @Inject(getWorkerServiceToken('high-priority')) 
+    private readonly highPriorityWorkerService: WorkerService,
+  ) {}
 
   async onModuleInit() {
-    this.registerHandlers(this.workerService);
+    // 为默认队列注册处理器
+    if (this.defaultWorkerService) {
+        this.logger.log('Registering handlers for default queue...');
+        this.registerHandlers(this.defaultWorkerService);
+    }
+
+    // 为高优先级队列注册处理器
+    if (this.highPriorityWorkerService) {
+        this.logger.log('Registering handlers for high-priority queue...');
+        this.registerHandlers(this.highPriorityWorkerService);
+    }
   }
 
   /**

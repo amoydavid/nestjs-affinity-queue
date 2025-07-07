@@ -37,6 +37,23 @@ import { TaskHandlerService } from './task-handler.service';
         heartbeatTimeout: parseInt(process.env.HEARTBEAT_TIMEOUT || '60000', 10),
       },
     }),
+    // ===================================================================
+    // 2. 使用 forFeature 添加一个独立的、名为 high-priority 的队列
+    // ===================================================================
+    QueueModule.forFeature({
+      name: 'high-priority',
+      role: (process.env.APP_ROLE as 'SCHEDULER' | 'WORKER' | 'BOTH') || 'BOTH',
+      workerOptions: {
+        maxBatchSize: 2, // 高优先级任务批次更小
+        workerCount: parseInt(process.env.WORKER_COUNT || '1', 10), // 可以为其分配不同的 worker 数量
+      },
+      queueOptions: {
+        pendingQueueName: 'high-priority-tasks', // 独立的待处理队列
+        workerQueuePrefix: 'hp-worker-queue', // 独立的 worker 队列前缀
+        workerStatePrefix: 'hp-worker-state', // 独立的 worker 状态前缀
+        schedulerInterval: 500, // 更频繁地调度
+      },
+    }),
   ],
   controllers: [AppController],
   providers: [AppService, TaskHandlerService],

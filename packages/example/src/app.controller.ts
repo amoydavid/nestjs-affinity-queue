@@ -1,34 +1,30 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
-import { QueueService, Task } from 'nestjs-affinity-queue';
+import { Task } from 'nestjs-affinity-queue';
 import { AppService } from './app.service';
 
 @Controller()
 export class AppController {
-  constructor(
-    private readonly appService: AppService,
-    private readonly queueService: QueueService,
-  ) {}
+  constructor(private readonly appService: AppService) {}
 
   @Get()
   getHello(): string {
     return this.appService.getHello();
   }
 
+  // ==============================================
+  //      Default Queue Endpoints
+  // ==============================================
+
   /**
-   * 添加任务到队列
+   * 添加任务到默认队列
    */
   @Post('tasks')
   async addTask(@Body() task: Task) {
-    const job = await this.queueService.add(task);
-    return {
-      message: '任务已添加到队列',
-      jobId: job.id,
-      task,
-    };
+    return this.appService.addTask(task);
   }
 
   /**
-   * 批量添加测试任务
+   * 批量添加测试任务到默认队列
    */
   @Post('tasks/batch')
   async addBatchTasks(
@@ -56,21 +52,40 @@ export class AppController {
     }
     
     const jobs = await Promise.all(
-      tasks.map(task => this.queueService.add(task))
+      tasks.map(task => this.appService.addTask(task))
     );
     
     return {
-      message: `成功添加 ${taskCount} 个任务`,
-      jobIds: jobs.map(job => job.id),
-      tasksPerCompany: Math.ceil(taskCount / companyCount),
+      message: `成功批量添加 ${taskCount} 个任务到默认队列`,
+      jobIds: jobs.map(job => job.jobId),
     };
   }
 
   /**
-   * 获取队列状态
+   * 获取默认队列状态
    */
   @Get('queue/stats')
   async getQueueStats() {
-    return await this.queueService.getQueueStats();
+    return this.appService.getDefaultQueueStats();
   }
-} 
+
+  // ==============================================
+  //      High-Priority Queue Endpoints
+  // ==============================================
+
+  /**
+   * 添加任务到高优先级队列
+   */
+  @Post('tasks/high-priority')
+  async addHighPriorityTask(@Body() task: Task) {
+    return this.appService.addHighPriorityTask(task);
+  }
+
+  /**
+   * 获取高优先级队列状态
+   */
+  @Get('queue/stats/high-priority')
+  async getHighPriorityQueueStats() {
+    return this.appService.getHighPriorityQueueStats();
+  }
+}

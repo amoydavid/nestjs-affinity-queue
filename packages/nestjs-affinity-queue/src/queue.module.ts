@@ -1,5 +1,5 @@
-import { Module, DynamicModule } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
+import { Module, DynamicModule, Provider } from '@nestjs/common';
+import { BullModule, getQueueToken } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { QueueService } from './queue.service';
 import { SchedulerProcessor } from './scheduler/scheduler.processor';
@@ -7,178 +7,180 @@ import { SchedulerElectionService } from './scheduler/scheduler.election';
 import { WorkerService } from './worker/worker.service';
 import { queueConfig } from './config/config';
 
+export const getQueueOptionsToken = (name: string): string => `QUEUE_OPTIONS_${name.toUpperCase()}`;
+export const getQueueServiceToken = (name: string): string => `QUEUE_SERVICE_${name.toUpperCase()}`;
+export const getWorkerServiceToken = (name: string): string => `WORKER_SERVICE_${name.toUpperCase()}`;
+export const getSchedulerProcessorToken = (name: string): string => `SCHEDULER_PROCESSOR_${name.toUpperCase()}`;
+
 export interface QueueModuleOptions {
-  /**
-   * 应用角色：调度器或工作节点
-   */
+  name?: string;
   role: 'SCHEDULER' | 'WORKER' | 'BOTH';
-  
-  /**
-   * Worker 配置选项
-   */
   workerOptions?: {
     maxBatchSize?: number;
     workerCount?: number;
   };
-
-  /**
-   * Redis 配置选项
-   */
   redisOptions?: {
     host?: string;
     port?: number;
     password?: string;
     db?: number;
   };
-
-  /**
-   * 队列配置选项
-   */
   queueOptions?: {
-    /**
-     * 待处理任务队列名称
-     */
     pendingQueueName?: string;
-    /**
-     * Worker 队列前缀
-     */
     workerQueuePrefix?: string;
-    /**
-     * Worker 状态前缀
-     */
     workerStatePrefix?: string;
-    /**
-     * 调度器间隔（毫秒）
-     */
     schedulerInterval?: number;
   };
-
-  /**
-   * 选举配置选项
-   */
   electionOptions?: {
-    /**
-     * 选举锁的过期时间（毫秒）
-     */
     electionLockTtl?: number;
-    /**
-     * 心跳间隔（毫秒）
-     */
     heartbeatInterval?: number;
-    /**
-     * 心跳超时时间（毫秒）
-     */
     heartbeatTimeout?: number;
   };
 }
 
+const createDefaultProviders = (options: QueueModuleOptions): Provider[] => {
+  const { role, workerOptions = {}, queueOptions = {} } = options;
+  const { pendingQueueName } = queueOptions;
+
+  const providers: Provider[] = [];
+
+  // The options provider is used by all services
+  providers.push({
+    provide: 'QUEUE_OPTIONS',
+    useValue: options,
+  });
+
+  // QueueService is always needed
+  providers.push({
+    provide: QueueService,
+    useFactory: (opts: QueueModuleOptions, queue: any) => new QueueService(opts, queue),
+    inject: ['QUEUE_OPTIONS', getQueueToken(pendingQueueName)],
+  });
+
+  // WorkerService is needed for WORKER or BOTH roles
+  if (role === 'WORKER' || role === 'BOTH') {
+    providers.push({
+      provide: WorkerService,
+      useFactory: (opts: QueueModuleOptions, electionService: SchedulerElectionService) => new WorkerService(opts, electionService),
+      inject: ['QUEUE_OPTIONS', SchedulerElectionService],
+    });
+  }
+
+  // SchedulerProcessor is needed for SCHEDULER or BOTH roles
+  if (role === 'SCHEDULER' || role === 'BOTH') {
+    providers.push({
+      provide: SchedulerProcessor,
+      useFactory: (opts: QueueModuleOptions, queue: any, electionService: SchedulerElectionService) => new SchedulerProcessor(opts, queue, electionService),
+      inject: ['QUEUE_OPTIONS', getQueueToken(pendingQueueName), SchedulerElectionService],
+    });
+  }
+
+  return providers;
+};
+
 @Module({})
 export class QueueModule {
   static forRoot(options: QueueModuleOptions): DynamicModule {
-    const { role, workerOptions = {}, redisOptions = {}, queueOptions = {}, electionOptions = {} } = options;
-    const { maxBatchSize = 10, workerCount = 1 } = workerOptions;
+    const { redisOptions = {}, queueOptions = {}, electionOptions = {} } = options;
     const { 
       host = 'localhost', 
       port = 6379, 
       password, 
       db = 0 
     } = redisOptions;
-    const {
-      pendingQueueName = 'pending-tasks',
-      workerQueuePrefix = 'worker-queue',
-      workerStatePrefix = 'worker-state',
-      schedulerInterval = 1000,
-    } = queueOptions;
+    const { pendingQueueName = 'pending-tasks' } = queueOptions;
 
-    // 设置全局队列选项，供配置模块使用
-    (global as any).__QUEUE_MODULE_OPTIONS__ = {
-      pendingQueueName,
-      workerQueuePrefix,
-      workerStatePrefix,
-      schedulerInterval,
-    };
+    // Set a global option for backward compatibility with the config module
+    (global as any).__QUEUE_MODULE_OPTIONS__ = queueOptions;
 
-    const imports = [
-      ConfigModule.forFeature(queueConfig),
-      // 始终导入 BullModule 根配置
-      BullModule.forRootAsync({
-        imports: [ConfigModule],
-        useFactory: async (configService: ConfigService) => {
-          // 优先使用外部配置的 Redis 参数，如果没有则使用环境变量
-          const redisHost = host || configService.get<string>('queue.redisHost');
-          const redisPort = port || configService.get<number>('queue.redisPort');
-          
-          const connection: any = {
-            host: redisHost,
-            port: redisPort,
-          };
-
-          // 只有当密码存在时才添加到连接配置中
-          if (password) {
-            connection.password = password;
-          }
-
-          // 只有当 db 存在且不为 0 时才添加到连接配置中
-          if (db !== undefined && db !== 0) {
-            connection.db = db;
-          }
-
-          connection.maxRetriesPerRequest = null;
-
-          return { connection };
-        },
-        inject: [ConfigService],
-      }),
-    ];
-
-    const providers: any[] = [];
-    const exportsList: any[] = [];
-
-    // 选举服务在所有模式下都需要
-    providers.push(SchedulerElectionService);
-    providers.push({
-      provide: 'ELECTION_OPTIONS',
-      useValue: electionOptions,
-    });
-
-    // 根据角色添加不同的服务和模块
-    if (role === 'SCHEDULER' || role === 'BOTH') {
-      providers.push(SchedulerProcessor);
-    }
-
-    if (role === 'WORKER' || role === 'BOTH') {
-      providers.push(WorkerService);
-      exportsList.push(WorkerService);
-    }
-
-    // QueueService 在所有模式下都需要，因为需要添加任务
-    providers.push(QueueService);
-    exportsList.push(QueueService);
+    const defaultProviders = createDefaultProviders(options);
 
     return {
       module: QueueModule,
-      imports,
+      imports: [
+        ConfigModule.forFeature(queueConfig),
+        BullModule.forRootAsync({
+          imports: [ConfigModule],
+          useFactory: async (configService: ConfigService) => ({
+            connection: {
+              host: host || configService.get<string>('queue.redisHost'),
+              port: port || configService.get<number>('queue.redisPort'),
+              password: password,
+              db: db,
+              maxRetriesPerRequest: null,
+            },
+          }),
+          inject: [ConfigService],
+        }),
+        BullModule.registerQueue({ name: pendingQueueName }),
+      ],
       providers: [
-        ...providers,
         {
-          provide: 'QUEUE_ROLE',
-          useValue: role,
-        },
-        {
-          provide: 'WORKER_OPTIONS',
-          useValue: { maxBatchSize, workerCount },
+          provide: 'ELECTION_OPTIONS',
+          useValue: electionOptions,
         },
         {
           provide: 'REDIS_OPTIONS',
           useValue: { host, port, password, db },
         },
-        {
-          provide: 'QUEUE_OPTIONS',
-          useValue: { pendingQueueName, workerQueuePrefix, workerStatePrefix, schedulerInterval },
-        },
+        SchedulerElectionService,
+        ...defaultProviders,
       ],
-      exports: exportsList,
+      exports: [QueueService, WorkerService, SchedulerElectionService],
       global: true,
     };
   }
-} 
+
+  static forFeature(options: QueueModuleOptions): DynamicModule {
+    const { name, role, queueOptions = {} } = options;
+    const { pendingQueueName } = queueOptions;
+
+    if (!name) {
+      throw new Error('QueueModule.forFeature() requires a "name" property in the options.');
+    }
+    if (!pendingQueueName) {
+      throw new Error('QueueModule.forFeature() requires a "pendingQueueName" in the queueOptions.');
+    }
+
+    const providers: Provider[] = [];
+    const exportsList: any[] = [];
+
+    const optionsToken = getQueueOptionsToken(name);
+    providers.push({ provide: optionsToken, useValue: options });
+
+    const queueServiceToken = getQueueServiceToken(name);
+    providers.push({
+      provide: queueServiceToken,
+      useFactory: (opts: any, queue: any) => new QueueService(opts, queue),
+      inject: [optionsToken, getQueueToken(pendingQueueName)],
+    });
+    exportsList.push(queueServiceToken);
+
+    if (role === 'WORKER' || role === 'BOTH') {
+      const workerServiceToken = getWorkerServiceToken(name);
+      providers.push({
+        provide: workerServiceToken,
+        useFactory: (opts: any, electionService: SchedulerElectionService) => new WorkerService(opts, electionService),
+        inject: [optionsToken, SchedulerElectionService],
+      });
+      exportsList.push(workerServiceToken);
+    }
+
+    if (role === 'SCHEDULER' || role === 'BOTH') {
+      const schedulerProcessorToken = getSchedulerProcessorToken(name);
+      providers.push({
+        provide: schedulerProcessorToken,
+        useFactory: (opts: any, queue: any, electionService: SchedulerElectionService) => new SchedulerProcessor(opts, queue, electionService),
+        inject: [optionsToken, getQueueToken(pendingQueueName), SchedulerElectionService],
+      });
+      // Note: Schedulers are internal and usually not exported.
+    }
+
+    return {
+      module: QueueModule,
+      imports: [BullModule.registerQueue({ name: pendingQueueName })],
+      providers,
+      exports: exportsList,
+    };
+  }
+}
