@@ -38,6 +38,12 @@ export interface QueueModuleOptions {
   };
 }
 
+export interface QueueModuleAsyncOptions {
+  useFactory: (...args: any[]) => Promise<QueueModuleOptions> | QueueModuleOptions;
+  inject?: any[];
+  imports?: any[];
+}
+
 const createDefaultProviders = (options: QueueModuleOptions): Provider[] => {
   const { role, workerOptions = {}, queueOptions = {} } = options;
   const { pendingQueueName } = queueOptions;
@@ -131,6 +137,98 @@ export class QueueModule {
     };
   }
 
+  static forRootAsync(options: QueueModuleAsyncOptions): DynamicModule {
+    return {
+      module: QueueModule,
+      imports: [
+        ...(options.imports || []),
+        ConfigModule.forFeature(queueConfig),
+        BullModule.forRootAsync({
+          imports: [ConfigModule],
+          useFactory: async (configService: ConfigService, ...args: any[]) => {
+            const queueOptions = await options.useFactory(...args);
+            const { redisOptions = {} } = queueOptions;
+            const { 
+              host = 'localhost', 
+              port = 6379, 
+              password, 
+              db = 0 
+            } = redisOptions;
+            
+            return {
+              connection: {
+                host: host || configService.get<string>('queue.redisHost'),
+                port: port || configService.get<number>('queue.redisPort'),
+                password: password,
+                db: db,
+                maxRetriesPerRequest: null,
+              },
+            };
+          },
+          inject: [ConfigService, ...(options.inject || [])],
+        }),
+      ],
+      providers: [
+        {
+          provide: 'QUEUE_OPTIONS_FACTORY',
+          useFactory: options.useFactory,
+          inject: options.inject || [],
+        },
+        {
+          provide: 'QUEUE_OPTIONS',
+          useFactory: (options: QueueModuleOptions) => options,
+          inject: ['QUEUE_OPTIONS_FACTORY'],
+        },
+        {
+          provide: 'ELECTION_OPTIONS',
+          useFactory: (options: QueueModuleOptions) => options.electionOptions || {},
+          inject: ['QUEUE_OPTIONS_FACTORY'],
+        },
+        {
+          provide: 'REDIS_OPTIONS',
+          useFactory: (options: QueueModuleOptions) => {
+            const { redisOptions = {} } = options;
+            const { 
+              host = 'localhost', 
+              port = 6379, 
+              password, 
+              db = 0 
+            } = redisOptions;
+            return { host, port, password, db };
+          },
+          inject: ['QUEUE_OPTIONS_FACTORY'],
+        },
+        {
+          provide: 'PENDING_QUEUE_NAME',
+          useFactory: (options: QueueModuleOptions) => {
+            const { queueOptions = {} } = options;
+            const { pendingQueueName = 'pending-tasks' } = queueOptions;
+            return pendingQueueName;
+          },
+          inject: ['QUEUE_OPTIONS_FACTORY'],
+        },
+        SchedulerElectionService,
+        {
+          provide: QueueService,
+          useFactory: (opts: QueueModuleOptions, queue: any) => new QueueService(opts, queue),
+          inject: ['QUEUE_OPTIONS', getQueueToken('pending-tasks')],
+        },
+        {
+          provide: WorkerService,
+          useFactory: (opts: QueueModuleOptions, electionService: SchedulerElectionService) => new WorkerService(opts, electionService),
+          inject: ['QUEUE_OPTIONS', SchedulerElectionService],
+        },
+        {
+          provide: SchedulerProcessor,
+          useFactory: (opts: QueueModuleOptions, queue: any, electionService: SchedulerElectionService) => new SchedulerProcessor(opts, queue, electionService),
+          inject: ['QUEUE_OPTIONS', getQueueToken('pending-tasks'), SchedulerElectionService],
+        },
+      ],
+      exports: [QueueService, WorkerService, SchedulerElectionService],
+      global: true,
+    };
+  }
+
   static forFeature(options: QueueModuleOptions): DynamicModule {
     const { name, role, queueOptions = {} } = options;
     const { pendingQueueName } = queueOptions;
@@ -179,6 +277,65 @@ export class QueueModule {
     return {
       module: QueueModule,
       imports: [BullModule.registerQueue({ name: pendingQueueName })],
+      providers,
+      exports: exportsList,
+    };
+  }
+
+  static forFeatureAsync(name: string, options: QueueModuleAsyncOptions): DynamicModule {
+    const providers: Provider[] = [];
+    const exportsList: any[] = [];
+
+    const optionsToken = getQueueOptionsToken(name);
+    providers.push({
+      provide: optionsToken,
+      useFactory: options.useFactory,
+      inject: options.inject || [],
+    });
+
+    const queueServiceToken = getQueueServiceToken(name);
+    providers.push({
+      provide: queueServiceToken,
+      useFactory: async (opts: QueueModuleOptions, queue: any) => {
+        return new QueueService(opts, queue);
+      },
+      inject: [optionsToken, getQueueToken('pending-tasks')],
+    });
+    exportsList.push(queueServiceToken);
+
+    // Worker service provider
+    const workerServiceToken = getWorkerServiceToken(name);
+    providers.push({
+      provide: workerServiceToken,
+      useFactory: async (opts: QueueModuleOptions, electionService: SchedulerElectionService) => {
+        if (opts.role === 'WORKER' || opts.role === 'BOTH') {
+          return new WorkerService(opts, electionService);
+        }
+        return null;
+      },
+      inject: [optionsToken, SchedulerElectionService],
+    });
+    exportsList.push(workerServiceToken);
+
+    // Scheduler processor provider
+    const schedulerProcessorToken = getSchedulerProcessorToken(name);
+    providers.push({
+      provide: schedulerProcessorToken,
+      useFactory: async (opts: QueueModuleOptions, queue: any, electionService: SchedulerElectionService) => {
+        if (opts.role === 'SCHEDULER' || opts.role === 'BOTH') {
+          return new SchedulerProcessor(opts, queue, electionService);
+        }
+        return null;
+      },
+      inject: [optionsToken, getQueueToken('pending-tasks'), SchedulerElectionService],
+    });
+
+    return {
+      module: QueueModule,
+      imports: [
+        ...(options.imports || []),
+        BullModule.registerQueue({ name: 'pending-tasks' }),
+      ],
       providers,
       exports: exportsList,
     };

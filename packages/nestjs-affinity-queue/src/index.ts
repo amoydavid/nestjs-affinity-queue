@@ -13,7 +13,7 @@
 // ==============================================
 
 export { QueueModule } from './queue.module';
-export type { QueueModuleOptions } from './queue.module';
+export type { QueueModuleOptions, QueueModuleAsyncOptions } from './queue.module';
 
 // ==============================================
 //      INJECTION TOKENS FOR FOR_FEATURE
