@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Queue, Worker, Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { Task } from '../common/interfaces/task.interface';
@@ -21,7 +21,7 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   private heartbeatInterval: NodeJS.Timeout;
 
   constructor(
-    @Inject('QUEUE_OPTIONS') private readonly options: QueueModuleOptions,
+    private readonly options: QueueModuleOptions,
     private readonly electionService: SchedulerElectionService,
   ) {
     this.logger = new Logger(`${WorkerService.name}:${this.options.name || 'default'}`);
@@ -135,14 +135,15 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 生成稳定的 Worker ID
-   * 使用进程 ID 和索引，避免每次重启都生成不同的 ID
+   * 使用进程 ID、队列名称和索引，避免每次重启都生成不同的 ID
    * @param index Worker 索引
    * @returns 稳定的 Worker ID
    */
   private generateStableWorkerId(index: number): string {
     const processId = process.pid;
     const hostname = require('os').hostname().replace(/[^a-zA-Z0-9]/g, '');
-    return `worker-${hostname}-${processId}-${index}`;
+    const queueName = this.options.name || 'default';
+    return `worker-${queueName}-${hostname}-${processId}-${index}`;
   }
 
   /**

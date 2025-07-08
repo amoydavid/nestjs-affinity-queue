@@ -1,43 +1,55 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { SchedulerElectionService } from 'nestjs-affinity-queue';
+import { Injectable, Logger, OnModuleInit, Inject } from '@nestjs/common';
+import { QueueModule, QueueService } from 'nestjs-affinity-queue';
 
 @Injectable()
 export class ElectionTestService implements OnModuleInit {
   private readonly logger = new Logger(ElectionTestService.name);
 
-  constructor(private readonly electionService: SchedulerElectionService) {}
+  constructor(
+    private readonly defaultQueueService: QueueService, // Default queue service from forRoot
+    @Inject(QueueModule.getQueueService('high-priority'))
+    private readonly highPriorityQueueService: any,
+    @Inject(QueueModule.getQueueService('email-queue'))
+    private readonly emailQueueService: any,
+    @Inject(QueueModule.getQueueService('file-processing'))
+    private readonly fileProcessingQueueService: any,
+  ) {}
 
   async onModuleInit() {
-    // 等待选举服务初始化
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // 等待服务初始化
+    await new Promise(resolve => setTimeout(resolve, 3000));
     
-    this.logger.log('=== 选举测试服务启动 ===');
-    this.logger.log(`当前节点ID: ${this.electionService.getCurrentNodeId()}`);
-    this.logger.log(`是否为领导者: ${this.electionService.isCurrentNodeLeader()}`);
+    this.logger.log('=== 多队列选举测试服务启动 ===');
+    this.logger.log('📊 监控所有队列的选举状态');
     
-    // 获取当前领导者信息
-    const leader = await this.electionService.getCurrentLeader();
-    if (leader) {
-      this.logger.log(`当前领导者: ${leader.nodeId} (${leader.hostname}:${leader.processId})`);
-    } else {
-      this.logger.log('当前没有领导者');
-    }
-    
-    // 获取注册的 Worker
-    const workers = await this.electionService.getRegisteredWorkers();
-    this.logger.log(`注册的 Worker 数量: ${workers.size}`);
-    
-    for (const [workerId, workerInfo] of workers.entries()) {
-      this.logger.log(`  - ${workerId} (${workerInfo.hostname}:${workerInfo.processId})`);
-    }
-    
-    // 定期输出状态信息
+    // 定期输出所有队列的状态信息
     setInterval(async () => {
-      const isLeader = this.electionService.isCurrentNodeLeader();
-      const leader = await this.electionService.getCurrentLeader();
-      const workers = await this.electionService.getRegisteredWorkers();
-      
-      this.logger.log(`状态更新 - 领导者: ${isLeader}, 当前领导者: ${leader?.nodeId || '无'}, Worker数量: ${workers.size}`);
-    }, 10000);
+      await this.logAllQueuesStatus();
+    }, 15000);
+
+    // 立即输出一次状态
+    await this.logAllQueuesStatus();
+  }
+
+  private async logAllQueuesStatus() {
+    this.logger.log('=== 队列状态更新 ===');
+    
+    const queues = [
+      { name: 'default', service: this.defaultQueueService },
+      { name: 'high-priority', service: this.highPriorityQueueService },
+      { name: 'email-queue', service: this.emailQueueService },
+      { name: 'file-processing', service: this.fileProcessingQueueService },
+    ];
+
+    for (const queue of queues) {
+      try {
+        const stats = await queue.service.getQueueStats();
+        this.logger.log(`📋 ${queue.name}: waiting=${stats.waiting}, active=${stats.active}, completed=${stats.completed}, failed=${stats.failed}`);
+      } catch (error: any) {
+        this.logger.error(`❌ ${queue.name}: 获取状态失败 - ${error.message}`);
+      }
+    }
+    
+    this.logger.log('=== 状态更新完成 ===');
   }
 } 

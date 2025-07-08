@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Queue, Job } from 'bullmq';
 import { Task } from './common/interfaces/task.interface';
 import { QueueModuleOptions } from './queue.module';
@@ -9,7 +9,8 @@ export class QueueService {
 
   constructor(
     // The options are now injected directly by a factory provider
-    @Inject('QUEUE_OPTIONS') private readonly options: QueueModuleOptions,
+    // This can be either the default 'QUEUE_OPTIONS' or a specific queue options token
+    private readonly options: QueueModuleOptions | any,
     // The queue is also injected by the factory provider
     private readonly pendingQueue: Queue,
   ) {

@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Queue, Job } from 'bullmq';
 import { Redis, Cluster } from 'ioredis';
 import { Task } from '../common/interfaces/task.interface';
@@ -15,7 +15,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
   private cleanupInterval: NodeJS.Timeout;
 
   constructor(
-    @Inject('QUEUE_OPTIONS') private readonly options: QueueModuleOptions,
+    private readonly options: QueueModuleOptions,
     private readonly pendingQueue: Queue,
     private readonly electionService: SchedulerElectionService,
   ) {

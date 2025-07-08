@@ -13,7 +13,12 @@
 // ==============================================
 
 export { QueueModule } from './queue.module';
-export type { QueueModuleOptions, QueueModuleAsyncOptions } from './queue.module';
+export type { 
+  QueueModuleOptions, 
+  QueueModuleAsyncOptions,
+  QueueModuleFeatureOptions,
+  QueueModuleFeatureAsyncOptions 
+} from './queue.module';
 
 // ==============================================
 //      INJECTION TOKENS FOR FOR_FEATURE
@@ -24,6 +29,8 @@ export {
   getWorkerServiceToken,
   getSchedulerProcessorToken,
   getQueueOptionsToken,
+  DEFAULT_QUEUE_NAME,
+  DEFAULT_PENDING_QUEUE_NAME,
 } from './queue.module';
 
 

@@ -10,6 +10,7 @@
 - 👥 多工作器支持
 - 📊 实时状态监控
 - 🔧 灵活的配置选项
+- 🎛️ 多队列支持 (NEW!)
 
 ## 安装
 
@@ -19,7 +20,9 @@ npm install nestjs-affinity-queue
 
 ## 快速开始
 
-### 1. 同步初始化
+### 1. 全局队列配置 (forRoot)
+
+#### 同步配置
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -53,7 +56,7 @@ import { QueueModule } from 'nestjs-affinity-queue';
 export class AppModule {}
 ```
 
-### 2. 异步初始化
+#### 异步配置
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -95,7 +98,9 @@ import { QueueModule } from 'nestjs-affinity-queue';
 export class AppModule {}
 ```
 
-### 3. 特性模块使用
+### 2. 特性队列配置 (forFeature)
+
+#### 同步特性配置
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -103,11 +108,24 @@ import { QueueModule } from 'nestjs-affinity-queue';
 
 @Module({
   imports: [
+    // 注册一个名为 'email-queue' 的特性队列
     QueueModule.forFeature({
       name: 'email-queue',
       role: 'WORKER',
+      workerOptions: {
+        maxBatchSize: 5,
+        workerCount: 1,
+      },
       queueOptions: {
-        pendingQueueName: 'email-pending',
+        pendingQueueName: 'email-pending-tasks',
+        workerQueuePrefix: 'email-worker-',
+        workerStatePrefix: 'email-worker-state-',
+        schedulerInterval: 2000,
+      },
+      electionOptions: {
+        electionLockTtl: 60000,
+        heartbeatInterval: 10000,
+        heartbeatTimeout: 30000,
       },
     }),
   ],
@@ -115,7 +133,7 @@ import { QueueModule } from 'nestjs-affinity-queue';
 export class EmailModule {}
 ```
 
-### 4. 异步特性模块
+#### 异步特性配置
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -130,12 +148,20 @@ import { QueueModule } from 'nestjs-affinity-queue';
       useFactory: async (configService: ConfigService) => ({
         name: 'email-queue',
         role: 'WORKER',
-        queueOptions: {
-          pendingQueueName: configService.get('EMAIL_QUEUE_NAME', 'email-pending'),
-        },
         workerOptions: {
           maxBatchSize: configService.get('EMAIL_BATCH_SIZE', 5),
           workerCount: configService.get('EMAIL_WORKER_COUNT', 1),
+        },
+        queueOptions: {
+          pendingQueueName: configService.get('EMAIL_QUEUE_NAME', 'email-pending-tasks'),
+          workerQueuePrefix: configService.get('EMAIL_WORKER_PREFIX', 'email-worker-'),
+          workerStatePrefix: configService.get('EMAIL_WORKER_STATE_PREFIX', 'email-worker-state-'),
+          schedulerInterval: configService.get('EMAIL_SCHEDULER_INTERVAL', 2000),
+        },
+        electionOptions: {
+          electionLockTtl: configService.get('EMAIL_ELECTION_LOCK_TTL', 60000),
+          heartbeatInterval: configService.get('EMAIL_HEARTBEAT_INTERVAL', 10000),
+          heartbeatTimeout: configService.get('EMAIL_HEARTBEAT_TIMEOUT', 30000),
         },
       }),
       inject: [ConfigService],
@@ -145,57 +171,130 @@ import { QueueModule } from 'nestjs-affinity-queue';
 export class EmailModule {}
 ```
 
-## 使用服务
+## 多队列使用示例
 
-### 注入队列服务
+### 同时使用多个队列
 
 ```typescript
-import { Injectable } from '@nestjs/common';
-import { QueueService } from 'nestjs-affinity-queue';
-import { Task } from 'nestjs-affinity-queue';
+import { Module } from '@nestjs/common';
+import { QueueModule } from 'nestjs-affinity-queue';
+
+@Module({
+  imports: [
+    // 全局默认队列
+    QueueModule.forRoot({
+      role: 'BOTH',
+      workerOptions: { maxBatchSize: 10 },
+      queueOptions: { pendingQueueName: 'default-pending' },
+    }),
+    
+    // 邮件队列
+    QueueModule.forFeature({
+      name: 'email-queue',
+      role: 'BOTH',
+      workerOptions: { maxBatchSize: 5 },
+      queueOptions: {
+        pendingQueueName: 'email-pending',
+        workerQueuePrefix: 'email-worker-',
+        workerStatePrefix: 'email-state-',
+      },
+    }),
+    
+    // 文件处理队列
+    QueueModule.forFeature({
+      name: 'file-queue',
+      role: 'WORKER',
+      workerOptions: { maxBatchSize: 3 },
+      queueOptions: {
+        pendingQueueName: 'file-pending',
+        workerQueuePrefix: 'file-worker-',
+        workerStatePrefix: 'file-state-',
+      },
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+### 注入和使用特定队列服务
+
+```typescript
+import { Injectable, Inject } from '@nestjs/common';
+import { QueueService, QueueModule } from 'nestjs-affinity-queue';
 
 @Injectable()
 export class TaskService {
-  constructor(private readonly queueService: QueueService) {}
+  constructor(
+    // 注入默认队列服务
+    private readonly defaultQueueService: QueueService,
+    
+    // 注入指定名称的队列服务
+    @Inject(QueueModule.getQueueService('email-queue'))
+    private readonly emailQueueService: QueueService,
+    
+    @Inject(QueueModule.getQueueService('file-queue'))
+    private readonly fileQueueService: QueueService,
+  ) {}
 
-  async addTask(task: Task) {
-    return await this.queueService.add(task);
+  async addDefaultTask(task: any) {
+    return await this.defaultQueueService.add(task);
   }
 
-  async getQueueStats() {
-    return await this.queueService.getQueueStats();
+  async addEmailTask(task: any) {
+    return await this.emailQueueService.add(task);
+  }
+
+  async addFileTask(task: any) {
+    return await this.fileQueueService.add(task);
+  }
+
+  async getEmailQueueStats() {
+    return await this.emailQueueService.getQueueStats();
   }
 }
 ```
 
-### 使用工作器服务
+### 注入工作器服务
 
 ```typescript
-import { Injectable } from '@nestjs/common';
-import { WorkerService } from 'nestjs-affinity-queue';
+import { Injectable, Inject } from '@nestjs/common';
+import { WorkerService, QueueModule } from 'nestjs-affinity-queue';
 
 @Injectable()
 export class WorkerController {
-  constructor(private readonly workerService: WorkerService) {}
+  constructor(
+    // 注入默认工作器服务
+    private readonly defaultWorkerService: WorkerService,
+    
+    // 注入指定名称的工作器服务
+    @Inject(QueueModule.getWorkerService('email-queue'))
+    private readonly emailWorkerService: WorkerService,
+  ) {}
 
-  async startWorker() {
-    await this.workerService.start();
-  }
+  async registerEmailHandlers() {
+    this.emailWorkerService.registerHandler('send-email', async (payload) => {
+      console.log('Sending email:', payload);
+      // 邮件发送逻辑
+      return { success: true };
+    });
 
-  async stopWorker() {
-    await this.workerService.stop();
+    this.emailWorkerService.registerHandler('send-newsletter', async (payload) => {
+      console.log('Sending newsletter:', payload);
+      // 邮件群发逻辑
+      return { success: true };
+    });
   }
 }
 ```
 
 ## 配置选项
 
-### QueueModuleOptions
+### QueueModuleOptions (forRoot)
 
 | 属性 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
 | `role` | `'SCHEDULER' \| 'WORKER' \| 'BOTH'` | - | 模块角色 |
-| `name` | `string` | - | 队列名称（forFeature 必需） |
+| `name` | `string` | `'default'` | 队列名称 |
 | `workerOptions.maxBatchSize` | `number` | `10` | 最大批处理大小 |
 | `workerOptions.workerCount` | `number` | `1` | 工作器数量 |
 | `redisOptions.host` | `string` | `'localhost'` | Redis 主机 |
@@ -210,11 +309,20 @@ export class WorkerController {
 | `electionOptions.heartbeatInterval` | `number` | `5000` | 心跳间隔（毫秒） |
 | `electionOptions.heartbeatTimeout` | `number` | `15000` | 心跳超时（毫秒） |
 
-### QueueModuleAsyncOptions
+### QueueModuleFeatureOptions (forFeature)
+
+| 属性 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `name` | `string` | - | **必需** 队列名称 |
+| `role` | `'SCHEDULER' \| 'WORKER' \| 'BOTH'` | - | **必需** 模块角色 |
+| `queueOptions.pendingQueueName` | `string` | - | **必需** 待处理队列名称 |
+| 其他选项 | - | - | 与 QueueModuleOptions 相同 |
+
+### 异步配置选项
 
 | 属性 | 类型 | 描述 |
 |------|------|------|
-| `useFactory` | `(...args: any[]) => Promise<QueueModuleOptions> \| QueueModuleOptions` | 工厂函数 |
+| `useFactory` | `(...args: any[]) => Promise<Options> \| Options` | 工厂函数 |
 | `inject` | `any[]` | 依赖注入数组 |
 | `imports` | `any[]` | 导入模块数组 |
 
@@ -222,14 +330,64 @@ export class WorkerController {
 
 ```typescript
 interface Task {
-  id: string;
-  type: string;
-  data: any;
-  affinity?: string;
-  priority?: number;
-  delay?: number;
-  attempts?: number;
+  type: string;           // 任务类型
+  identifyTag: string;    // 身份标识（亲和性标识）
+  payload: any;           // 任务数据
 }
+```
+
+## 静态方法
+
+### 获取服务注入令牌
+
+```typescript
+// 获取队列服务注入令牌
+QueueModule.getQueueService('queue-name')
+
+// 获取工作器服务注入令牌  
+QueueModule.getWorkerService('queue-name')
+
+// 获取调度器处理器注入令牌
+QueueModule.getSchedulerProcessor('queue-name')
+```
+
+## 最佳实践
+
+### 1. 队列命名约定
+
+```typescript
+// 推荐使用有意义的队列名称
+QueueModule.forFeature({
+  name: 'user-notifications',  // 清晰描述队列用途
+  queueOptions: {
+    pendingQueueName: 'user-notifications-pending',
+    workerQueuePrefix: 'user-notifications-worker-',
+    workerStatePrefix: 'user-notifications-state-',
+  },
+});
+```
+
+### 2. 角色分离
+
+```typescript
+// 生产环境建议分离调度器和工作器
+const role = process.env.APP_ROLE as 'SCHEDULER' | 'WORKER' | 'BOTH';
+
+QueueModule.forRoot({
+  role,
+  // 其他配置...
+});
+```
+
+### 3. 环境配置
+
+```typescript
+// .env 文件
+REDIS_HOST=localhost
+REDIS_PORT=6379
+EMAIL_QUEUE_MAX_BATCH=5
+FILE_QUEUE_MAX_BATCH=3
+APP_ROLE=BOTH
 ```
 
 ## 许可证

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Redis } from 'ioredis';
 
 export interface SchedulerElectionOptions {
@@ -16,11 +16,16 @@ export interface SchedulerElectionOptions {
    * 心跳超时时间（毫秒）
    */
   heartbeatTimeout?: number;
+
+  /**
+   * 队列名称，用于隔离不同队列的选举
+   */
+  queueName?: string;
 }
 
 @Injectable()
 export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(SchedulerElectionService.name);
+  private readonly logger: Logger;
   private redis: Redis;
   private nodeId: string;
   private isLeader = false;
@@ -28,31 +33,34 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
   private electionLockTtl: number;
   private heartbeatIntervalMs: number;
   private heartbeatTimeout: number;
-  private readonly prefix: string = 'affinity-queue:scheduler';
+  private readonly queueName: string;
+  private readonly prefix: string;
 
-  // Redis 键名 getter
+  // Redis 键名 getter - 包含队列名称以实现隔离
   private get ELECTION_LOCK_KEY() { return `${this.prefix}:election:lock`; }
   private get LEADER_INFO_KEY() { return `${this.prefix}:leader:info`; }
   private get WORKER_REGISTRY_KEY() { return `${this.prefix}:worker:registry`; }
 
   constructor(
-    @Inject('ELECTION_OPTIONS')
-    private readonly options: SchedulerElectionOptions = {},
-    @Inject('REDIS_OPTIONS')
-    private readonly redisOptions: any,
+    options: SchedulerElectionOptions = {},
+    redisOptions: any,
   ) {
+    this.queueName = options.queueName || 'default';
+    this.prefix = `affinity-queue:scheduler:${this.queueName}`;
+    this.logger = new Logger(`${SchedulerElectionService.name}:${this.queueName}`);
+
     // Use the same Redis connection settings as queue.module.ts
     const connection: any = {
-      host: this.redisOptions.host || 'localhost',
-      port: this.redisOptions.port || 6379,
+      host: redisOptions.host || 'localhost',
+      port: redisOptions.port || 6379,
     };
 
-    if (this.redisOptions.password) {
-      connection.password = this.redisOptions.password;
+    if (redisOptions.password) {
+      connection.password = redisOptions.password;
     }
 
-    if (this.redisOptions.db !== undefined && this.redisOptions.db !== 0) {
-      connection.db = this.redisOptions.db;
+    if (redisOptions.db !== undefined && redisOptions.db !== 0) {
+      connection.db = redisOptions.db;
     }
 
     connection.maxRetriesPerRequest = null;
@@ -60,10 +68,10 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
     this.redis = new Redis(connection);
     this.nodeId = this.generateNodeId();
     
-    // Set default values
-    this.electionLockTtl = options.electionLockTtl || 30000; // 30 seconds
-    this.heartbeatIntervalMs = options.heartbeatInterval || 10000; // 10 seconds
-    this.heartbeatTimeout = options.heartbeatTimeout || 60000; // 60 seconds
+    // Set default values with faster election
+    this.electionLockTtl = options.electionLockTtl || 15000; // 减少到 15 秒
+    this.heartbeatIntervalMs = options.heartbeatInterval || 5000; // 减少到 5 秒  
+    this.heartbeatTimeout = options.heartbeatTimeout || 30000; // 减少到 30 秒
   }
 
   async onModuleInit() {
