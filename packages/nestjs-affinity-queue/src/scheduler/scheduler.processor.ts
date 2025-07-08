@@ -47,41 +47,78 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // /**
+  //  * 恢复孤儿任务
+  //  * 检查所有 Worker 队列，将未完成的任务重新放回调度队列头部
+  //  */
+  // private async recoverOrphanedTasks(): Promise<void> {
+  //   // Type guard to ensure we don't pass a Cluster client to a method expecting a Redis client.
+  //   if (this.redis instanceof Cluster) {
+  //       this.logger.error('Redis Cluster is not supported for task recovery at this time.');
+  //       return;
+  //   }
+
+  //   try {
+  //     this.logger.log('Checking for orphaned tasks by scanning worker states...');
+      
+  //     const workerStatePrefix = this.options.queueOptions.workerStatePrefix;
+  //     const stateKeys = await RedisUtils.scanKeys(this.redis, `${workerStatePrefix}:*`);
+      
+  //     let totalRecoveredTasks = 0;
+      
+  //     for (const stateKey of stateKeys) {
+  //       const workerId = stateKey.substring(stateKey.lastIndexOf(':') + 1);
+  //       if (!workerId) continue;
+
+  //       const workerQueueName = `${this.options.queueOptions.workerQueuePrefix}-${workerId}`;
+  //       const recoveredCount = await this.recoverTasksFromQueue(workerQueueName);
+  //       totalRecoveredTasks += recoveredCount;
+  //     }
+      
+  //     if (totalRecoveredTasks > 0) {
+  //       this.logger.log(`Successfully recovered ${totalRecoveredTasks} orphaned tasks to the scheduling queue.`);
+  //     } else {
+  //       this.logger.log('No orphaned tasks found to recover.');
+  //     }
+  //   } catch (error) {
+  //     this.logger.error('Error while recovering orphaned tasks:', error);
+  //   }
+  // }
+
   /**
-   * 恢复孤儿任务
-   * 检查所有 Worker 队列，将未完成的任务重新放回调度队列头部
+   * 恢复孤儿任务 - 单一策略版本
+   * 直接扫描所有 Worker 队列，不依赖 Worker 状态记录
    */
   private async recoverOrphanedTasks(): Promise<void> {
-    // Type guard to ensure we don't pass a Cluster client to a method expecting a Redis client.
     if (this.redis instanceof Cluster) {
         this.logger.error('Redis Cluster is not supported for task recovery at this time.');
         return;
     }
 
     try {
-      this.logger.log('Checking for orphaned tasks by scanning worker states...');
+      this.logger.log('开始恢复孤儿任务...');
       
-      const workerStatePrefix = this.options.queueOptions.workerStatePrefix;
-      const stateKeys = await RedisUtils.scanKeys(this.redis, `${workerStatePrefix}:*`);
+      const workerQueuePrefix = this.options.queueOptions.workerQueuePrefix;
+      const queuePattern = `${workerQueuePrefix}-*`;
+      
+      // 直接扫描所有 Worker 队列
+      const queueKeys = await RedisUtils.scanKeys(this.redis, queuePattern);
       
       let totalRecoveredTasks = 0;
       
-      for (const stateKey of stateKeys) {
-        const workerId = stateKey.substring(stateKey.lastIndexOf(':') + 1);
-        if (!workerId) continue;
-
-        const workerQueueName = `${this.options.queueOptions.workerQueuePrefix}-${workerId}`;
-        const recoveredCount = await this.recoverTasksFromQueue(workerQueueName);
+      for (const queueKey of queueKeys) {
+        const queueName = queueKey;
+        const recoveredCount = await this.recoverTasksFromQueue(queueName);
         totalRecoveredTasks += recoveredCount;
       }
       
       if (totalRecoveredTasks > 0) {
-        this.logger.log(`Successfully recovered ${totalRecoveredTasks} orphaned tasks to the scheduling queue.`);
+        this.logger.log(`成功恢复 ${totalRecoveredTasks} 个孤儿任务到调度队列。`);
       } else {
-        this.logger.log('No orphaned tasks found to recover.');
+        this.logger.log('未发现需要恢复的孤儿任务。');
       }
     } catch (error) {
-      this.logger.error('Error while recovering orphaned tasks:', error);
+      this.logger.error('恢复孤儿任务时发生错误:', error);
     }
   }
 
@@ -96,31 +133,48 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
       
       const waitingJobs = await workerQueue.getWaiting();
       const activeJobs = await workerQueue.getActive();
+      const delayedJobs = await workerQueue.getDelayed();
       
-      const allJobs = [...waitingJobs, ...activeJobs];
+      const allJobs = [...waitingJobs, ...activeJobs, ...delayedJobs];
       
       if (allJobs.length === 0) {
         await workerQueue.close();
         return 0;
       }
       
-      this.logger.log(`Found ${allJobs.length} unfinished tasks in queue ${queueName}`);
+      this.logger.log(`在队列 ${queueName} 中发现 ${allJobs.length} 个未完成的任务`);
       
       let recoveredCount = 0;
       
+      // 按优先级排序：活跃任务 > 等待任务 > 延迟任务
       const sortedJobs = allJobs.sort((a, b) => {
         const aActive = activeJobs.some(job => job.id === a.id);
         const bActive = activeJobs.some(job => job.id === b.id);
+        const aDelayed = delayedJobs.some(job => job.id === a.id);
+        const bDelayed = delayedJobs.some(job => job.id === b.id);
         
+        // 活跃任务优先
         if (aActive && !bActive) return -1;
         if (!aActive && bActive) return 1;
         
+        // 延迟任务最后
+        if (aDelayed && !bDelayed) return 1;
+        if (!aDelayed && bDelayed) return -1;
+        
+        // 按时间戳排序
         return a.timestamp - b.timestamp;
       });
       
       for (const job of sortedJobs) {
         try {
           const task = job.data as Task;
+          
+          // 验证任务数据的完整性
+          if (!task || !task.identifyTag) {
+            this.logger.warn(`跳过无效任务 ${job.id}，缺少必要数据`);
+            await job.remove();
+            continue;
+          }
           
           await this.pendingQueue.add('pending-task', task, {
             priority: 1, 
@@ -132,15 +186,16 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
           await job.remove();
           
           recoveredCount++;
-          this.logger.log(`Recovered task ${job.id} (${task.identifyTag}) from queue ${queueName}`);
+          this.logger.log(`恢复任务 ${job.id} (${task.identifyTag}) 从队列 ${queueName}`);
         } catch (error) {
-          this.logger.error(`Error recovering task ${job.id}:`, error);
+          this.logger.error(`恢复任务 ${job.id} 时发生错误:`, error);
         }
       }
+      
       await workerQueue.close();
       return recoveredCount;
     } catch (error) {
-      this.logger.error(`Error recovering tasks from queue ${queueName}:`, error);
+      this.logger.error(`从队列 ${queueName} 恢复任务时发生错误:`, error);
       return 0;
     }
   }
