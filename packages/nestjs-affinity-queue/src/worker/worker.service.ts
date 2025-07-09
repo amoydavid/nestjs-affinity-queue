@@ -235,10 +235,14 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
     const task = job.data as Task;
     this.logger.log(`Job completed event for worker ${workerId}: ${job.id}, task type: ${task.type}`);
     
-    const currentState = this.workerStates.get(workerId);
+    // 从 Redis 获取最新的 Worker 状态，而不是使用内存中的状态
+    const currentState = await this.getWorkerStateFromRedis(workerId);
     
     if (currentState) {
       this.logger.log(`Current state for worker ${workerId}: ${JSON.stringify(currentState)}`);
+      
+      // 同步更新内存状态
+      this.workerStates.set(workerId, currentState);
       
       const shouldReset = await this.shouldResetWorkerState(workerId, currentState);
       
@@ -249,7 +253,7 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`Worker ${workerId} has not completed its batch, maintaining current state.`);
       }
     } else {
-      this.logger.warn(`Could not retrieve current state for worker ${workerId}`);
+      this.logger.warn(`Could not retrieve current state for worker ${workerId} from Redis`);
     }
   }
 
@@ -259,8 +263,12 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   private async onJobFailed(job: Job, error: Error, workerId: string): Promise<void> {
     this.logger.error(`Job failed for worker ${workerId}, job id ${job.id}:`, error);
     
-    const currentState = this.workerStates.get(workerId);
+    // 从 Redis 获取最新的 Worker 状态
+    const currentState = await this.getWorkerStateFromRedis(workerId);
     if (currentState) {
+      // 同步更新内存状态
+      this.workerStates.set(workerId, currentState);
+      
       const shouldReset = await this.shouldResetWorkerState(workerId, currentState);
       if (shouldReset) {
         await this.resetWorkerState(workerId);
@@ -270,24 +278,73 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * 从 Redis 获取 Worker 状态
+   */
+  private async getWorkerStateFromRedis(workerId: string): Promise<WorkerState | null> {
+    try {
+      const key = `${this.options.queueOptions.workerStatePrefix}:${workerId}`;
+      const data = await this.redis.hgetall(key);
+      
+      if (data && data.workerId) {
+        return {
+          workerId: data.workerId,
+          status: data.status as 'idle' | 'running',
+          currentIdentifyTag: data.currentIdentifyTag || null,
+          currentBatchSize: parseInt(data.currentBatchSize || '0', 10),
+        };
+      }
+      
+      return null;
+    } catch (error) {
+      this.logger.error(`Failed to get worker state from Redis for ${workerId}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * 判断是否应该重置 Worker 状态
    */
   private async shouldResetWorkerState(workerId: string, state: WorkerState): Promise<boolean> {
     const maxBatchSize = this.options.workerOptions.maxBatchSize;
+    
+    // 1. 如果达到最大批次大小，必须重置
     if (state.currentBatchSize >= maxBatchSize) {
       this.logger.log(`Worker ${workerId} has reached its max batch size of ${maxBatchSize} and needs a state reset.`);
       return true;
     }
 
+    // 2. 如果没有当前处理的身份标识，应该重置状态
+    if (!state.currentIdentifyTag) {
+      this.logger.log(`Worker ${workerId} has no current identify tag, should reset state.`);
+      return true;
+    }
+
     const queueName = `${this.options.queueOptions.workerQueuePrefix}-${workerId}`;
     const queue = new Queue(queueName, { connection: this.redis });
-    const counts = await queue.getJobCounts('wait', 'active');
-    await queue.close();
-
-    const totalJobs = counts.wait + counts.active;
-    this.logger.log(`Worker ${workerId} queue status check: waiting=${counts.wait}, active=${counts.active}`);
     
-    return totalJobs === 0;
+    try {
+      // 3. 检查队列中是否还有任务（不区分identifyTag）
+      const counts = await queue.getJobCounts('wait', 'active');
+      const totalJobs = counts.wait + counts.active;
+      
+      this.logger.log(`Worker ${workerId} queue status check: waiting=${counts.wait}, active=${counts.active}, total=${totalJobs}`);
+      
+      // 4. 只有当队列完全为空时，才认为当前批次完成
+      const shouldReset = totalJobs === 0;
+      
+      if (shouldReset) {
+        this.logger.log(`Worker ${workerId} queue is empty, batch completed for identify tag '${state.currentIdentifyTag}', should reset state.`);
+      } else {
+        this.logger.log(`Worker ${workerId} still has ${totalJobs} tasks in queue, maintaining state for identify tag '${state.currentIdentifyTag}'.`);
+      }
+      
+      return shouldReset;
+    } catch (error) {
+      this.logger.error(`Error checking worker ${workerId} queue status:`, error);
+      return false;
+    } finally {
+      await queue.close();
+    }
   }
 
   /**

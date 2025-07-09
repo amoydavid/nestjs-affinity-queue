@@ -355,6 +355,18 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * 从注册表中移除 Worker
+   */
+  async removeWorkerFromRegistry(workerId: string): Promise<void> {
+    try {
+      await this.redis.hdel(this.WORKER_REGISTRY_KEY, workerId);
+      this.logger.debug(`Worker ${workerId} 已从注册表中移除`);
+    } catch (error) {
+      this.logger.error(`从注册表移除 Worker ${workerId} 时发生错误:`, error);
+    }
+  }
+
+  /**
    * 获取当前领导者信息
    */
   async getCurrentLeader(): Promise<any> {
