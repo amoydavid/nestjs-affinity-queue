@@ -46,17 +46,33 @@ export class RedisConnectionManager implements OnModuleDestroy {
   async onModuleDestroy() {
     this.logger.log('Closing all Redis connections...');
     
+    if (this.connections.size === 0) {
+      this.logger.log('No Redis connections to close');
+      return;
+    }
+    
     const closePromises = Array.from(this.connections.entries()).map(async ([name, redis]) => {
       try {
-        if (redis.status === 'ready') {
-          await redis.quit();
+        // 检查连接状态，只关闭活跃的连接
+        if (redis.status === 'ready' || redis.status === 'connect') {
+          await Promise.race([
+            redis.quit(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000))
+          ]);
           this.logger.log(`Redis connection closed: ${name}`);
         } else {
           this.logger.log(`Redis connection ${name} already closed (status: ${redis.status})`);
         }
       } catch (error) {
-        // 忽略连接已关闭的错误
-        if (error.message && !error.message.includes('Connection is closed')) {
+        // 忽略常见的连接关闭错误
+        if (error.message && (
+          error.message.includes('Connection is closed') ||
+          error.message.includes('EPIPE') ||
+          error.message.includes('Socket is closed') ||
+          error.message.includes('Timeout')
+        )) {
+          this.logger.debug(`Redis connection ${name} close error ignored: ${error.message}`);
+        } else {
           this.logger.error(`Error closing Redis connection ${name}:`, error);
         }
       }

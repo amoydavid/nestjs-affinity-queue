@@ -414,14 +414,35 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.heartbeatInterval);
     }
 
+    // 避免重复关闭
+    if (this.workers.size === 0) {
+      this.logger.log('WorkerService 已经关闭，跳过重复关闭');
+      return;
+    }
+
     // 立即关闭所有 Worker，不等待正在执行的任务完成
     const closePromises = Array.from(this.workers.entries()).map(async ([workerId, worker]) => {
       try {
+        // 检查 Worker 是否已经关闭
+        if (!worker.isRunning()) {
+          this.logger.debug(`Worker ${workerId} 已经关闭，跳过`);
+          return;
+        }
+        
         // 使用 forceClose 立即关闭 Worker，不等待正在执行的任务
         await worker.close(true); // force close
         this.logger.log(`Worker 已强制关闭: ${workerId}`);
       } catch (error) {
-        this.logger.error(`关闭 Worker ${workerId} 时发生错误:`, error);
+        // 忽略连接已关闭等常见错误
+        if (error.message && (
+          error.message.includes('Connection is closed') ||
+          error.message.includes('EPIPE') ||
+          error.message.includes('Socket is closed')
+        )) {
+          this.logger.debug(`Worker ${workerId} 连接已关闭，跳过错误`);
+        } else {
+          this.logger.error(`关闭 Worker ${workerId} 时发生错误:`, error);
+        }
       }
     });
 
