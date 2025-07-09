@@ -1,10 +1,12 @@
 import { Module, DynamicModule, Provider } from '@nestjs/common';
 import { BullModule, getQueueToken } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { Redis } from 'ioredis';
 import { QueueService } from './queue.service';
 import { SchedulerProcessor } from './scheduler/scheduler.processor';
 import { SchedulerElectionService } from './scheduler/scheduler.election';
 import { WorkerService } from './worker/worker.service';
+import { RedisConnectionManager } from './common/redis-connection.manager';
 import { queueConfig } from './config/config';
 
 // Token 生成函数
@@ -94,16 +96,28 @@ const createDefaultProviders = (options: QueueModuleOptions): Provider[] => {
     useValue: { ...options, name: queueName },
   });
 
+  // Redis 连接管理器
+  providers.push(RedisConnectionManager);
+
+  // 创建共享的 Redis 连接
+  providers.push({
+    provide: 'SHARED_REDIS_CONNECTION',
+    useFactory: (redisOptions: any, manager: RedisConnectionManager) => {
+      return manager.getConnection(queueName, redisOptions);
+    },
+    inject: ['REDIS_OPTIONS', RedisConnectionManager],
+  });
+
   // Create queue-specific election service
   providers.push({
     provide: SchedulerElectionService,
-    useFactory: (electionOptions: any, redisOptions: any) => {
+    useFactory: (electionOptions: any, sharedRedis: Redis) => {
       return new SchedulerElectionService(
         { ...electionOptions, queueName },
-        redisOptions
+        sharedRedis
       );
     },
-    inject: ['ELECTION_OPTIONS', 'REDIS_OPTIONS'],
+    inject: ['ELECTION_OPTIONS', 'SHARED_REDIS_CONNECTION'],
   });
 
   // QueueService is always needed
@@ -152,20 +166,20 @@ const createFeatureProviders = (options: QueueModuleFeatureOptions): { providers
   const electionServiceToken = `SCHEDULER_ELECTION_SERVICE_${name.toUpperCase()}`;
   providers.push({
     provide: electionServiceToken,
-    useFactory: (opts: QueueModuleFeatureOptions) => {
-      // Extract Redis options from the feature options, or use defaults
-      const redisOptions = opts.redisOptions || {
+    useFactory: (opts: QueueModuleFeatureOptions, redisManager: RedisConnectionManager) => {
+      // 使用共享的 Redis 连接管理器
+      const redisConnection = redisManager.getConnection(name, opts.redisOptions || {
         host: 'localhost',
         port: 6379,
         db: 0
-      };
+      });
       
       return new SchedulerElectionService(
         { ...electionOptions, queueName: name },
-        redisOptions
+        redisConnection
       );
     },
-    inject: [optionsToken],
+    inject: [optionsToken, RedisConnectionManager],
   });
 
   // QueueService for this specific queue
@@ -319,24 +333,32 @@ export class QueueModule {
           },
           inject: ['QUEUE_OPTIONS_FACTORY'],
         },
+        // Redis 连接管理器
+        RedisConnectionManager,
+        // 创建共享的 Redis 连接
+        {
+          provide: 'SHARED_REDIS_CONNECTION',
+          useFactory: (redisOptions: any, manager: RedisConnectionManager) => {
+            return manager.getConnection('default', redisOptions);
+          },
+          inject: ['REDIS_OPTIONS', RedisConnectionManager],
+        },
+        // 使用 createDefaultProviders 避免重复注册，但需要修改注入依赖
         {
           provide: SchedulerElectionService,
-          useFactory: (electionOptions: any, redisOptions: any, queueOptions: QueueModuleOptions) => {
-            return new SchedulerElectionService(
-              { ...electionOptions, queueName: queueOptions.name || DEFAULT_QUEUE_NAME },
-              redisOptions
-            );
+          useFactory: (electionOptions: any, sharedRedis: Redis) => {
+            return new SchedulerElectionService(electionOptions, sharedRedis);
           },
-          inject: ['ELECTION_OPTIONS', 'REDIS_OPTIONS', 'QUEUE_OPTIONS'],
+          inject: ['ELECTION_OPTIONS', 'SHARED_REDIS_CONNECTION'],
         },
         {
           provide: QueueService,
-          useFactory: async (opts: QueueModuleOptions, queue: any) => new QueueService(opts, queue),
+          useFactory: (opts: QueueModuleOptions, queue: any) => new QueueService(opts, queue),
           inject: ['QUEUE_OPTIONS', getQueueToken(DEFAULT_PENDING_QUEUE_NAME)],
         },
         {
           provide: WorkerService,
-          useFactory: async (opts: QueueModuleOptions, electionService: SchedulerElectionService) => {
+          useFactory: (opts: QueueModuleOptions, electionService: SchedulerElectionService) => {
             if (opts.role === 'WORKER' || opts.role === 'BOTH') {
               return new WorkerService(opts, electionService);
             }
@@ -346,7 +368,7 @@ export class QueueModule {
         },
         {
           provide: SchedulerProcessor,
-          useFactory: async (opts: QueueModuleOptions, queue: any, electionService: SchedulerElectionService) => {
+          useFactory: (opts: QueueModuleOptions, queue: any, electionService: SchedulerElectionService) => {
             if (opts.role === 'SCHEDULER' || opts.role === 'BOTH') {
               return new SchedulerProcessor(opts, queue, electionService);
             }
@@ -376,7 +398,10 @@ export class QueueModule {
     return {
       module: QueueModule,
       imports: [BullModule.registerQueue({ name: pendingQueueName })],
-      providers,
+      providers: [
+        RedisConnectionManager, // 确保 RedisConnectionManager 可用
+        ...providers,
+      ],
       exports: exportsList,
     };
   }
@@ -394,6 +419,7 @@ export class QueueModule {
         ...(options.imports || []),
       ],
       providers: [
+        RedisConnectionManager, // 确保 RedisConnectionManager 可用
         {
           provide: getQueueOptionsToken(name),
           useFactory: options.useFactory,
@@ -401,20 +427,20 @@ export class QueueModule {
         },
         {
           provide: electionServiceToken,
-          useFactory: (opts: QueueModuleFeatureOptions) => {
-            // Extract Redis options from the queue module options, or use defaults
-            const redisOptions = opts.redisOptions || {
+          useFactory: (opts: QueueModuleFeatureOptions, redisManager: RedisConnectionManager) => {
+            // 使用共享的 Redis 连接管理器
+            const redisConnection = redisManager.getConnection(name, opts.redisOptions || {
               host: 'localhost',
               port: 6379,
               db: 0
-            };
+            });
             
             return new SchedulerElectionService(
               { ...opts.electionOptions, queueName: name },
-              redisOptions
+              redisConnection
             );
           },
-          inject: [getQueueOptionsToken(name)],
+          inject: [getQueueOptionsToken(name), RedisConnectionManager],
         },
         {
           provide: getQueueServiceToken(name),

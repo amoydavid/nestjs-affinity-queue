@@ -408,18 +408,28 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    this.logger.log('开始 WorkerService 优雅关闭...');
+    
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
     }
 
-    for (const [workerId, worker] of this.workers) {
-      await worker.close();
-      this.logger.log(`Worker closed: ${workerId}`);
-    }
+    // 立即关闭所有 Worker，不等待正在执行的任务完成
+    const closePromises = Array.from(this.workers.entries()).map(async ([workerId, worker]) => {
+      try {
+        // 使用 forceClose 立即关闭 Worker，不等待正在执行的任务
+        await worker.close(true); // force close
+        this.logger.log(`Worker 已强制关闭: ${workerId}`);
+      } catch (error) {
+        this.logger.error(`关闭 Worker ${workerId} 时发生错误:`, error);
+      }
+    });
+
+    await Promise.all(closePromises);
     
     this.workers.clear();
     this.workerStates.clear();
     
-    this.logger.log('WorkerService has been destroyed.');
+    this.logger.log('WorkerService 已销毁 - 所有 Worker 已立即关闭');
   }
 }

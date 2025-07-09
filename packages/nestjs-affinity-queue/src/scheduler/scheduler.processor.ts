@@ -13,6 +13,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
   private redis: Redis | Cluster;
   private schedulerInterval: NodeJS.Timeout;
   private cleanupInterval: NodeJS.Timeout;
+  private electionMonitoringInterval: NodeJS.Timeout; // 新增：选举状态监控间隔
 
   constructor(
     private readonly options: QueueModuleOptions,
@@ -43,23 +44,68 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
     // 等待选举服务初始化
     await new Promise(resolve => setTimeout(resolve, 1000));
     
-    // 只有当选为领导者时才启动调度功能
-    if (this.electionService.isCurrentNodeLeader()) {
-      this.logger.log('Current node is the scheduler leader, starting scheduling functions.');
-      
-      // 恢复孤儿任务
-      await this.recoverOrphanedTasks();
-      
-      // 开始调度循环
-      this.startScheduling();
-      
-      // 启动清理过期 Worker 的定时任务
-      this.startCleanupTask();
-      
-      this.logger.log('Scheduler has started.');
-    } else {
-      this.logger.log('Current node is not the scheduler leader, will run as a worker only.');
-    }
+    // 启动选举状态监控 - 动态响应选举状态变化
+    this.startElectionMonitoring();
+  }
+
+  /**
+   * 启动选举状态监控
+   * 定期检查选举状态，动态启动或停止调度功能
+   */
+  private startElectionMonitoring() {
+    let isSchedulerStarted = false;
+    
+    const checkElectionStatus = async () => {
+      try {
+        const isLeader = this.electionService.isCurrentNodeLeader();
+        
+        if (isLeader && !isSchedulerStarted) {
+          // 成为领导者，启动调度功能
+          this.logger.log('Current node became the scheduler leader, starting scheduling functions.');
+          
+          // 恢复孤儿任务
+          await this.recoverOrphanedTasks();
+          
+          // 开始调度循环
+          this.startScheduling();
+          
+          // 启动清理过期 Worker 的定时任务
+          this.startCleanupTask();
+          
+          isSchedulerStarted = true;
+          this.logger.log('Scheduler has started.');
+          
+        } else if (!isLeader && isSchedulerStarted) {
+          // 失去领导者身份，停止调度功能
+          this.logger.log('Current node lost scheduler leadership, stopping scheduling functions.');
+          
+          if (this.schedulerInterval) {
+            clearInterval(this.schedulerInterval);
+            this.schedulerInterval = null;
+          }
+          
+          if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval);
+            this.cleanupInterval = null;
+          }
+          
+          isSchedulerStarted = false;
+          this.logger.log('Scheduler has stopped.');
+          
+        } else if (!isLeader && !isSchedulerStarted) {
+          // 仍然不是领导者
+          this.logger.debug('Current node is not the scheduler leader, will run as a worker only.');
+        }
+      } catch (error) {
+        this.logger.error('检查选举状态时发生错误:', error);
+      }
+    };
+    
+    // 立即检查一次
+    checkElectionStatus();
+    
+    // 每2秒检查一次选举状态
+    this.electionMonitoringInterval = setInterval(checkElectionStatus, 2000);
   }
 
   // /**
@@ -849,6 +895,8 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
    * 清理资源
    */
   async onModuleDestroy() {
+    this.logger.log('开始 SchedulerProcessor 优雅关闭...');
+    
     if (this.schedulerInterval) {
       clearInterval(this.schedulerInterval);
     }
@@ -857,6 +905,10 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.cleanupInterval);
     }
     
-    this.logger.log('Scheduler has stopped.');
+    if (this.electionMonitoringInterval) {
+      clearInterval(this.electionMonitoringInterval);
+    }
+    
+    this.logger.log('SchedulerProcessor 已停止');
   }
 }

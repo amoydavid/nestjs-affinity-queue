@@ -35,6 +35,7 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
   private heartbeatTimeout: number;
   private readonly queueName: string;
   private readonly prefix: string;
+  private ownRedisConnection = false; // 标记是否是自己创建的连接
 
   // Redis 键名 getter - 包含队列名称以实现隔离
   private get ELECTION_LOCK_KEY() { return `${this.prefix}:election:lock`; }
@@ -43,35 +44,44 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     options: SchedulerElectionOptions = {},
-    redisOptions: any,
+    redisOptionsOrConnection: any,
   ) {
     this.queueName = options.queueName || 'default';
     this.prefix = `affinity-queue:scheduler:${this.queueName}`;
     this.logger = new Logger(`${SchedulerElectionService.name}:${this.queueName}`);
 
-    // Use the same Redis connection settings as queue.module.ts
-    const connection: any = {
-      host: redisOptions.host || 'localhost',
-      port: redisOptions.port || 6379,
-    };
+    // 检查传入的是 Redis 连接还是配置
+    if (redisOptionsOrConnection && typeof redisOptionsOrConnection.get === 'function') {
+      // 传入的是已有的 Redis 连接
+      this.redis = redisOptionsOrConnection;
+      this.ownRedisConnection = false;
+    } else {
+      // 传入的是 Redis 配置，需要创建新连接
+      const connection: any = {
+        host: redisOptionsOrConnection.host || 'localhost',
+        port: redisOptionsOrConnection.port || 6379,
+      };
 
-    if (redisOptions.password) {
-      connection.password = redisOptions.password;
+      if (redisOptionsOrConnection.password) {
+        connection.password = redisOptionsOrConnection.password;
+      }
+
+      if (redisOptionsOrConnection.db !== undefined && redisOptionsOrConnection.db !== 0) {
+        connection.db = redisOptionsOrConnection.db;
+      }
+
+      connection.maxRetriesPerRequest = null;
+
+      this.redis = new Redis(connection);
+      this.ownRedisConnection = true;
     }
 
-    if (redisOptions.db !== undefined && redisOptions.db !== 0) {
-      connection.db = redisOptions.db;
-    }
-
-    connection.maxRetriesPerRequest = null;
-
-    this.redis = new Redis(connection);
     this.nodeId = this.generateNodeId();
     
     // Set default values with faster election
-    this.electionLockTtl = options.electionLockTtl || 15000; // 减少到 15 秒
-    this.heartbeatIntervalMs = options.heartbeatInterval || 5000; // 减少到 5 秒  
-    this.heartbeatTimeout = options.heartbeatTimeout || 30000; // 减少到 30 秒
+    this.electionLockTtl = options.electionLockTtl || 10000; // 减少到 10 秒
+    this.heartbeatIntervalMs = options.heartbeatInterval || 3000; // 减少到 3 秒  
+    this.heartbeatTimeout = options.heartbeatTimeout || 15000; // 减少到 15 秒
   }
 
   async onModuleInit() {
@@ -81,8 +91,19 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy() {
     await this.stopElection();
-    if (this.redis) {
-      await this.redis.quit();
+    // 只有在自己创建连接时才关闭它
+    if (this.redis && this.ownRedisConnection) {
+      try {
+        if (this.redis.status === 'ready') {
+          await this.redis.quit();
+          this.logger.log(`Redis connection closed for ${this.queueName}`);
+        }
+      } catch (error) {
+        // 忽略连接已关闭的错误
+        if (error.message && !error.message.includes('Connection is closed')) {
+          this.logger.error(`Error closing Redis connection for ${this.queueName}:`, error);
+        }
+      }
     }
   }
 
