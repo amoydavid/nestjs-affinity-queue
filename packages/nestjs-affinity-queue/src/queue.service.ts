@@ -8,13 +8,10 @@ export class QueueService {
   private readonly logger = new Logger(QueueService.name);
 
   constructor(
-    // The options are now injected directly by a factory provider
-    // This can be either the default 'QUEUE_OPTIONS' or a specific queue options token
     private readonly options: QueueModuleOptions | any,
-    // The queue is also injected by the factory provider
     private readonly pendingQueue: Queue,
   ) {
-    this.logger.log(`QueueService for "${this.options.name || 'default'}" initialized with queue: ${this.pendingQueue.name}`);
+    this.logger.log(`QueueService initialized: ${this.options.name || 'default'}`);
   }
 
   /**
@@ -23,16 +20,13 @@ export class QueueService {
    * @returns Promise<Job> 返回 BullMQ Job 对象
    */
   async add(task: Task): Promise<Job> {
-    this.logger.log(`Adding task to queue ${this.pendingQueue.name}: ${JSON.stringify(task)}`);
-    
     const job = await this.pendingQueue.add(
       'pending-task',
       task,
       {
-        // 任务选项
-        removeOnComplete: 100, // 保留最近 100 个完成的任务
-        removeOnFail: 50, // 保留最近 50 个失败的任务
-        attempts: 3, // 重试次数
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        attempts: 3,
         backoff: {
           type: 'exponential',
           delay: 2000,
@@ -40,7 +34,7 @@ export class QueueService {
       }
     );
 
-    this.logger.log(`Task added to queue ${this.pendingQueue.name}, Job ID: ${job.id}`);
+    this.logger.log(`Task added: ${task.type}(${task.identifyTag}) -> Job ${job.id}`);
     return job;
   }
 
