@@ -854,17 +854,25 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
       const totalBatchSize = workerStates.reduce((sum, w) => sum + w.currentBatchSize, 0);
       const totalQueueLength = enhancedWorkers.reduce((sum, w) => sum + w.queueLength, 0);
       
-      // 按 identifyTag 分组统计
+      // 按 identifyTag 分组统计（包含并发信息）
       const tagStats = workerStates
         .filter(w => w.currentIdentifyTag)
         .reduce((acc, w) => {
           const tag = w.currentIdentifyTag!;
-          acc[tag] = (acc[tag] || 0) + w.currentBatchSize;
+          if (!acc[tag]) {
+            acc[tag] = { batchCount: 0, runningWorkers: 0, maxConcurrency: this.getIdentifyTagConcurrency(tag) };
+          }
+          acc[tag].batchCount += w.currentBatchSize;
+          if (w.status === 'running') {
+            acc[tag].runningWorkers++;
+          }
           return acc;
-        }, {} as Record<string, number>);
+        }, {} as Record<string, { batchCount: number; runningWorkers: number; maxConcurrency: number }>);
       
       const tagStatsStr = Object.keys(tagStats).length > 0 
-        ? Object.entries(tagStats).map(([tag, count]) => `${tag}:${count}`).join(', ')
+        ? Object.entries(tagStats).map(([tag, stats]) => 
+            `${tag}:${stats.batchCount}(${stats.runningWorkers}/${stats.maxConcurrency})`
+          ).join(', ')
         : '无';
 
       this.logger.log('📊 Worker 状态表格:');
@@ -947,32 +955,75 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
     workerStates: WorkerState[],
     job: Job,
   ): Promise<boolean> {
+    // 检查 identifyTag 并发数限制
+    const maxConcurrency = this.getIdentifyTagConcurrency(task.identifyTag);
+    const currentRunningCount = this.getRunningWorkerCountForTag(task.identifyTag, workerStates);
+    
+    // 如果运行中的 worker 数量小于并发数限制，优先分配空闲 worker
+    if (currentRunningCount < maxConcurrency) {
+      const idleWorker = workerStates.find(worker => worker.status === 'idle');
+      
+      if (idleWorker) {
+        return await this.assignToWorker(task, idleWorker, job);
+      }
+    }
+    
+    // 如果没有空闲 worker 或已达到并发限制，尝试复用现有 worker
+    const maxBatchSize = this.options.workerOptions.maxBatchSize;
     const affinityWorker = workerStates.find(
-      worker => worker.currentIdentifyTag === task.identifyTag && worker.status === 'running'
+      worker => worker.currentIdentifyTag === task.identifyTag && worker.status === 'running' && worker.currentBatchSize < maxBatchSize
     );
 
     if (affinityWorker) {
-      const maxBatchSize = this.options.workerOptions.maxBatchSize;
-      
-      // 使用累积计数器 currentBatchSize 进行判断，而不是实时队列长度
-      // this.logger.debug(`Worker ${affinityWorker.workerId} 当前批次大小: ${affinityWorker.currentBatchSize}/${maxBatchSize}`);
-      
-      if (affinityWorker.currentBatchSize < maxBatchSize) {
-        return await this.assignToWorker(task, affinityWorker, job);
+      return await this.assignToWorker(task, affinityWorker, job);
+    }
+
+    return false;
+  }
+
+  /**
+   * 获取指定 identifyTag 的并发数配置
+   * @param identifyTag 标识标签
+   * @returns 并发数
+   */
+  private getIdentifyTagConcurrency(identifyTag: string): number {
+    const concurrencyConfig = this.options.queueOptions?.identifyTagConcurrency;
+    
+    if (!concurrencyConfig) {
+      return 1; // 默认并发数为 1
+    }
+    
+    // 如果是数字，直接返回
+    if (typeof concurrencyConfig === 'number') {
+      return concurrencyConfig;
+    }
+    
+    // 如果是对象配置
+    if (typeof concurrencyConfig === 'object') {
+      // 检查是否有 default 属性
+      if ('default' in concurrencyConfig) {
+        const config = concurrencyConfig as { default: number; [key: string]: number };
+        return config[identifyTag] !== undefined ? config[identifyTag] : config.default;
       } else {
-        // this.logger.debug(`Task ${task.identifyTag} is waiting for worker ${affinityWorker.workerId} to complete its current batch (${affinityWorker.currentBatchSize}/${maxBatchSize}).`);
-        return false;
+        // 纯粹的 Record<string, number> 配置
+        const config = concurrencyConfig as Record<string, number>;
+        return config[identifyTag] !== undefined ? config[identifyTag] : 1;
       }
     }
-
-    const idleWorker = workerStates.find(worker => worker.status === 'idle');
     
-    if (idleWorker) {
-      return await this.assignToWorker(task, idleWorker, job);
-    }
+    return 1; // 默认值
+  }
 
-    // this.logger.debug(`Task ${task.identifyTag} is waiting for an idle worker.`);
-    return false;
+  /**
+   * 获取指定 identifyTag 当前运行中的 worker 数量
+   * @param identifyTag 标识标签
+   * @param workerStates 所有 worker 状态
+   * @returns 运行中的 worker 数量
+   */
+  private getRunningWorkerCountForTag(identifyTag: string, workerStates: WorkerState[]): number {
+    return workerStates.filter(
+      worker => worker.currentIdentifyTag === identifyTag && worker.status === 'running'
+    ).length;
   }
 
   /**

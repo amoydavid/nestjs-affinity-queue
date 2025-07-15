@@ -31,6 +31,13 @@ import { MultiQueueService } from './multi-queue.service';
         workerQueuePrefix: process.env.WORKER_QUEUE_PREFIX || 'default-worker-queue',
         workerStatePrefix: process.env.WORKER_STATE_PREFIX || 'default-worker-state',
         schedulerInterval: parseInt(process.env.SCHEDULER_INTERVAL || '1000', 10),
+        // identifyTag 并发数配置示例
+        identifyTagConcurrency: {
+          default: 1,           // 默认每个 identifyTag 最多 1 个 worker
+          'high-priority': 3,   // high-priority 标签最多 3 个 worker
+          'batch-process': 2,   // batch-process 标签最多 2 个 worker
+          'single-task': 1,     // single-task 标签最多 1 个 worker
+        },
       },
       electionOptions: {
         electionLockTtl: parseInt(process.env.ELECTION_LOCK_TTL || '30000', 10),

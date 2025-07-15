@@ -11,6 +11,7 @@
 - 📊 实时状态监控
 - 🔧 灵活的配置选项
 - 🎛️ 多队列支持 (NEW!)
+- 🎚️ identifyTag 并发数控制 (NEW!)
 
 ## 安装
 
@@ -305,6 +306,7 @@ export class WorkerController {
 | `queueOptions.workerQueuePrefix` | `string` | `'worker-'` | 工作器队列前缀 |
 | `queueOptions.workerStatePrefix` | `string` | `'worker-state-'` | 工作器状态前缀 |
 | `queueOptions.schedulerInterval` | `number` | `1000` | 调度器间隔（毫秒） |
+| `queueOptions.identifyTagConcurrency` | `number \| Record<string, number>` | `1` | identifyTag 并发数控制 |
 | `electionOptions.electionLockTtl` | `number` | `30000` | 选举锁 TTL（毫秒） |
 | `electionOptions.heartbeatInterval` | `number` | `5000` | 心跳间隔（毫秒） |
 | `electionOptions.heartbeatTimeout` | `number` | `15000` | 心跳超时（毫秒） |
@@ -349,6 +351,212 @@ QueueModule.getWorkerService('queue-name')
 
 // 获取调度器处理器注入令牌
 QueueModule.getSchedulerProcessor('queue-name')
+```
+
+## identifyTag 并发数控制
+
+`identifyTag` 并发数控制功能允许您为每个 `identifyTag` 设置最大并发 worker 数量，从而实现更精细的任务调度控制。
+
+### 功能特性
+
+- **默认并发数**: 每个 `identifyTag` 默认最多只能有 1 个 worker 同时运行
+- **灵活配置**: 支持全局配置、特定标签配置，以及混合配置
+- **实时监控**: 在 Worker 状态表格中显示每个 `identifyTag` 的并发情况
+- **智能调度**: 当达到并发限制时，任务会等待现有 worker 完成或有新的 worker 可用
+
+### 配置方式
+
+#### 1. 全局数字配置
+
+```typescript
+QueueModule.forRoot({
+  queueOptions: {
+    identifyTagConcurrency: 2, // 所有 identifyTag 最多 2 个 worker
+  }
+})
+```
+
+#### 2. 特定标签配置
+
+```typescript
+QueueModule.forRoot({
+  queueOptions: {
+    identifyTagConcurrency: {
+      'high-priority': 3,    // high-priority 最多 3 个 worker
+      'batch-process': 2,    // batch-process 最多 2 个 worker
+      'single-task': 1,      // single-task 最多 1 个 worker
+    }
+  }
+})
+```
+
+#### 3. 混合配置（推荐）
+
+```typescript
+QueueModule.forRoot({
+  queueOptions: {
+    identifyTagConcurrency: {
+      default: 1,            // 默认并发数
+      'high-priority': 3,    // 特定标签的并发数
+      'batch-process': 2,
+      'real-time': 5,
+    }
+  }
+})
+```
+
+### 工作原理
+
+#### 调度逻辑
+
+1. **并发检查**: 调度器首先检查当前 `identifyTag` 的运行中 worker 数量
+2. **限制判断**: 如果已达到最大并发数，尝试复用现有 worker（如果未达到批次限制）
+3. **新 Worker 分配**: 如果未达到并发限制，分配新的空闲 worker
+4. **等待机制**: 如果无法分配，任务将等待直到有 worker 可用
+
+#### 优先级规则
+
+1. **亲和性优先**: 优先使用已处理相同 `identifyTag` 的 worker
+2. **批次限制**: 在 `maxBatchSize` 限制内复用 worker
+3. **并发限制**: 确保不超过 `identifyTag` 的最大并发数
+4. **空闲分配**: 在限制内分配空闲 worker
+
+### 监控和日志
+
+#### Worker 状态表格
+
+```
+┌──────────────────────┬────────┬─────────────────┬───────────┬─────────┬───────────┐
+│ Worker ID            │ Status │ Current Tag     │ Batch Cnt │ Job ID  │ Queue Len │
+├──────────────────────┼────────┼─────────────────┼───────────┼─────────┼───────────┤
+│ node-hostname-123... │ 🟢 RUN │ high-priority   │ 2         │ 1234    │ 3         │
+│ node-hostname-456... │ 🟢 RUN │ high-priority   │ 1         │ 1235    │ 2         │
+│ node-hostname-789... │ 🟢 RUN │ batch-process   │ 1         │ 1236    │ 1         │
+│ node-hostname-012... │ ⚪ IDLE │ -               │ 0         │ -       │ 0         │
+└──────────────────────┴────────┴─────────────────┴───────────┴─────────┴───────────┘
+```
+
+#### 统计信息
+
+```
+📈 统计: 运行中=3, 空闲=1, 总批次计数=4, 实时队列总长=6, 标签分布=[high-priority:3(2/3), batch-process:1(1/2)]
+💡 说明: 标签分布格式=tag:批次数(运行中worker数/最大并发数)
+```
+
+#### 调试日志
+
+```
+[DEBUG] identifyTag high-priority 当前运行中的 worker 数量: 2/3
+[DEBUG] Worker node-hostname-123 assigned task high-priority, batch size increased from 1 to: 2
+[DEBUG] Task single-task is waiting due to concurrency limit (1/1)
+```
+
+### 使用示例
+
+#### 基本使用
+
+```typescript
+// 配置
+QueueModule.forRoot({
+  queueOptions: {
+    identifyTagConcurrency: {
+      default: 1,
+      'email-sending': 3,
+      'file-processing': 2,
+    }
+  }
+})
+
+// 添加任务
+await queueService.add({
+  type: 'email',
+  identifyTag: 'email-sending',  // 最多 3 个 worker
+  data: { recipient: 'user@example.com' }
+});
+
+await queueService.add({
+  type: 'process',
+  identifyTag: 'file-processing',  // 最多 2 个 worker
+  data: { filePath: '/path/to/file' }
+});
+```
+
+#### 环境变量配置
+
+```bash
+# 在应用启动时通过环境变量配置
+export IDENTIFY_TAG_CONCURRENCY='{"default":1,"high-priority":3,"batch-process":2}'
+```
+
+```typescript
+QueueModule.forRoot({
+  queueOptions: {
+    identifyTagConcurrency: process.env.IDENTIFY_TAG_CONCURRENCY 
+      ? JSON.parse(process.env.IDENTIFY_TAG_CONCURRENCY)
+      : { default: 1 }
+  }
+})
+```
+
+### 最佳实践
+
+#### 1. 合理设置并发数
+
+```typescript
+// 根据任务特性设置并发数
+{
+  default: 1,                    // 默认保守设置
+  'cpu-intensive': 1,            // CPU 密集型任务，避免竞争
+  'io-bound': 5,                 // I/O 密集型任务，可以更高并发
+  'network-request': 3,          // 网络请求，中等并发
+  'database-operation': 2,       // 数据库操作，避免连接池耗尽
+}
+```
+
+#### 2. 监控和调优
+
+- 定期检查 Worker 状态表格
+- 观察任务等待时间
+- 根据系统负载调整并发数
+- 使用不同的 `identifyTag` 隔离不同类型的任务
+
+#### 3. 错误处理
+
+```typescript
+// 为不同类型的任务设置不同的重试策略
+await queueService.add({
+  type: 'critical-task',
+  identifyTag: 'critical-operations',  // 低并发，高可靠性
+  data: { /* ... */ }
+});
+```
+
+### 注意事项
+
+1. **内存使用**: 更高的并发数会增加内存使用
+2. **资源竞争**: 注意避免资源竞争（数据库连接、文件锁等）
+3. **系统负载**: 根据系统性能合理设置并发数
+4. **任务设计**: 确保任务是无状态的，可以并行执行
+
+### 迁移指南
+
+#### 从旧版本升级
+
+如果您之前没有配置 `identifyTagConcurrency`，默认行为保持不变（每个 `identifyTag` 最多 1 个 worker）。
+
+要启用新功能，只需在配置中添加：
+
+```typescript
+QueueModule.forRoot({
+  queueOptions: {
+    // 其他配置...
+    identifyTagConcurrency: {
+      default: 1,  // 保持原有行为
+      // 为需要更高并发的标签增加配置
+      'high-throughput': 5,
+    }
+  }
+})
 ```
 
 ## 最佳实践

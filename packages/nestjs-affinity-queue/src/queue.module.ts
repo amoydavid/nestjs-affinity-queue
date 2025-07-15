@@ -37,6 +37,14 @@ export interface QueueModuleOptions {
     workerQueuePrefix?: string;
     workerStatePrefix?: string;
     schedulerInterval?: number;
+    /**
+     * 每个 identifyTag 的并发数配置
+     * 可以是：
+     * - number: 全局默认并发数
+     * - Record<string, number>: 为特定 identifyTag 设置并发数
+     * - { default: number, [key: string]: number }: 包含默认值和特定配置
+     */
+    identifyTagConcurrency?: number | Record<string, number> | { default: number; [key: string]: number };
   };
   electionOptions?: {
     electionLockTtl?: number;
@@ -63,6 +71,14 @@ export interface QueueModuleFeatureOptions {
     workerQueuePrefix?: string;
     workerStatePrefix?: string;
     schedulerInterval?: number;
+    /**
+     * 每个 identifyTag 的并发数配置
+     * 可以是：
+     * - number: 全局默认并发数
+     * - Record<string, number>: 为特定 identifyTag 设置并发数
+     * - { default: number, [key: string]: number }: 包含默认值和特定配置
+     */
+    identifyTagConcurrency?: number | Record<string, number> | { default: number; [key: string]: number };
   };
   electionOptions?: {
     electionLockTtl?: number;
