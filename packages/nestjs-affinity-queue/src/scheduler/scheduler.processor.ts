@@ -765,9 +765,9 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
       
       for (const job of sortedJobs) {
         const task = job.data as Task;
-        
         try {
-          const assigned = await this.assignTask(task, workerStates, job);
+          const realTimeWorkerStates = await this.getAllWorkerStates();
+          const assigned = await this.assignTask(task, realTimeWorkerStates, job);
           if (assigned) {
             assignedCount++;
           }
@@ -776,7 +776,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
         }
       }
       
-      this.logger.log(`本轮调度完成：${assignedCount}/${allWaitingJobs.length} 个任务已分配`);
+      // this.logger.log(`本轮调度完成：${assignedCount}/${allWaitingJobs.length} 个任务已分配`);
       
       // 如果有任务分配，再次显示更新后的 Worker 状态
       if (assignedCount > 0) {
@@ -955,12 +955,12 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
       const maxBatchSize = this.options.workerOptions.maxBatchSize;
       
       // 使用累积计数器 currentBatchSize 进行判断，而不是实时队列长度
-      this.logger.debug(`Worker ${affinityWorker.workerId} 当前批次大小: ${affinityWorker.currentBatchSize}/${maxBatchSize}`);
+      // this.logger.debug(`Worker ${affinityWorker.workerId} 当前批次大小: ${affinityWorker.currentBatchSize}/${maxBatchSize}`);
       
       if (affinityWorker.currentBatchSize < maxBatchSize) {
         return await this.assignToWorker(task, affinityWorker, job);
       } else {
-        this.logger.debug(`Task ${task.identifyTag} is waiting for worker ${affinityWorker.workerId} to complete its current batch (${affinityWorker.currentBatchSize}/${maxBatchSize}).`);
+        // this.logger.debug(`Task ${task.identifyTag} is waiting for worker ${affinityWorker.workerId} to complete its current batch (${affinityWorker.currentBatchSize}/${maxBatchSize}).`);
         return false;
       }
     }
@@ -971,7 +971,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
       return await this.assignToWorker(task, idleWorker, job);
     }
 
-    this.logger.debug(`Task ${task.identifyTag} is waiting for an idle worker.`);
+    // this.logger.debug(`Task ${task.identifyTag} is waiting for an idle worker.`);
     return false;
   }
 

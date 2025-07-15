@@ -305,15 +305,7 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
    * 判断是否应该重置 Worker 状态
    */
   private async shouldResetWorkerState(workerId: string, state: WorkerState): Promise<boolean> {
-    const maxBatchSize = this.options.workerOptions.maxBatchSize;
-    
-    // 1. 如果达到最大批次大小，必须重置
-    if (state.currentBatchSize >= maxBatchSize) {
-      this.logger.log(`Worker ${workerId} has reached its max batch size of ${maxBatchSize} and needs a state reset.`);
-      return true;
-    }
-
-    // 2. 如果没有当前处理的身份标识，应该重置状态
+    // 1. 如果没有当前处理的身份标识，应该重置状态
     if (!state.currentIdentifyTag) {
       this.logger.log(`Worker ${workerId} has no current identify tag, should reset state.`);
       return true;
@@ -323,13 +315,13 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
     const queue = new Queue(queueName, { connection: this.redis });
     
     try {
-      // 3. 检查队列中是否还有任务（不区分identifyTag）
-      const counts = await queue.getJobCounts('wait', 'active');
-      const totalJobs = counts.wait + counts.active;
+      // 2. 检查队列中是否还有任务（不区分identifyTag）
+      const counts = await queue.getJobCounts();
+      const totalJobs = (counts.wait || counts.waiting || 0) + (counts.active || 0) + (counts.delayed || 0) + (counts.prioritized || 0);
       
-      this.logger.log(`Worker ${workerId} queue status check: waiting=${counts.wait}, active=${counts.active}, total=${totalJobs}`);
+      this.logger.log(`Worker ${workerId} queue status check: waiting=${counts.wait || counts.waiting}, active=${counts.active}, total=${totalJobs}`);
       
-      // 4. 只有当队列完全为空时，才认为当前批次完成
+      // 3. 只有当队列完全为空时，才认为当前批次完成
       const shouldReset = totalJobs === 0;
       
       if (shouldReset) {
