@@ -978,12 +978,17 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
     
     // 如果没有空闲 worker 或已达到并发限制，尝试复用现有 worker
     const maxBatchSize = this.options.workerOptions.maxBatchSize;
-    const affinityWorker = workerStates.find(
+    const affinityWorkers = workerStates.filter(
       worker => worker.currentIdentifyTag === task.identifyTag && worker.status === 'running' && worker.currentBatchSize < maxBatchSize
     );
 
-    if (affinityWorker) {
-      return await this.assignToWorker(task, affinityWorker, job);
+    if (affinityWorkers.length > 0) {
+      // 优先复用 currentBatchSize 最小的 worker
+      const selectedWorker = affinityWorkers.reduce((minWorker, currentWorker) => 
+        currentWorker.currentBatchSize < minWorker.currentBatchSize ? currentWorker : minWorker
+      );
+      
+      return await this.assignToWorker(task, selectedWorker, job);
     }
 
     return false;
@@ -1049,7 +1054,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
         connection: this.redis,
       });
 
-      this.logger.debug(`JOB: ${job.id} | Worker ${worker.workerId} | 亲和票房 ${task.identifyTag} -> ${workerQueueName} task: ${JSON.stringify(task)}`);
+      this.logger.debug(`JOB: ${job.id} | Worker ${worker.workerId} | ${task.identifyTag} -> ${workerQueueName} task: ${JSON.stringify(task)}`);
 
       await workerQueue.add('execute-task', task, {
         removeOnComplete: 50,
