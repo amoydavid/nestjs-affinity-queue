@@ -60,7 +60,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
           this.logger.log('⏹️ Lost scheduler leadership, stopping functions');
           
           if (this.schedulerInterval) {
-            clearInterval(this.schedulerInterval);
+            clearTimeout(this.schedulerInterval);
             this.schedulerInterval = null;
           }
           
@@ -692,18 +692,26 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 开始调度循环
+   * 使用 setTimeout 确保串行执行，避免并发调度问题
    */
   private startScheduling() {
     const interval = this.options.queueOptions.schedulerInterval;
-    this.schedulerInterval = setInterval(async () => {
+    
+    const scheduleNext = async () => {
       try {
         if (this.electionService.isCurrentNodeLeader()) {
           await this.processScheduling();
         }
       } catch (error) {
         this.logger.error('Error during scheduling process:', error);
+      } finally {
+        // 无论成功还是失败，都安排下一次调度
+        this.schedulerInterval = setTimeout(scheduleNext, interval);
       }
-    }, interval);
+    };
+    
+    // 启动第一次调度
+    this.schedulerInterval = setTimeout(scheduleNext, interval);
   }
 
   /**
@@ -1041,7 +1049,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
         connection: this.redis,
       });
 
-      this.logger.debug(`Worker ${worker.workerId} 分配任务 ${task.identifyTag} 到队列 ${workerQueueName} task: ${JSON.stringify(task)}`);
+      this.logger.debug(`JOB: ${job.id} | Worker ${worker.workerId} | 亲和票房 ${task.identifyTag} -> ${workerQueueName} task: ${JSON.stringify(task)}`);
 
       await workerQueue.add('execute-task', task, {
         removeOnComplete: 50,
@@ -1169,7 +1177,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
     this.logger.log('开始 SchedulerProcessor 优雅关闭...');
     
     if (this.schedulerInterval) {
-      clearInterval(this.schedulerInterval);
+      clearTimeout(this.schedulerInterval);
     }
     
     if (this.cleanupInterval) {
