@@ -197,7 +197,7 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
     // 延迟清理，给其他节点重启预留时间
     setTimeout(async () => {
       await this.performDelayedCleanup(emptyQueues, processedQueues);
-    }, 60000); // 60秒后清理
+    }, 12000); // 120秒后清理
   }
 
   /**
@@ -439,6 +439,13 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
    */
   private async shouldCleanWorkerKey(_key: string, workerId: string): Promise<boolean> {
     try {
+      // 双重检查：在决定清理之前，再次确认 Worker 是否处于非活跃状态，以防止竞态条件
+      const activeWorkerIds = await this.getActiveWorkerIds();
+      if (activeWorkerIds.includes(workerId)) {
+        this.logger.debug(`检测到 Worker ${workerId} 已重新变为活跃状态，跳过清理 key: ${_key}`);
+        return false;
+      }
+
       // 检查对应的队列是否存在且为空
       const queueName = `${this.options.queueOptions.workerQueuePrefix}-${workerId}`;
       const queue = new Queue(queueName, { connection: this.redis });
@@ -578,8 +585,9 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
           else if (isPrioritized) jobPriority = 5; // 保持原有优先级任务的中等优先级
           else jobPriority = 0; // 其他任务默认优先级
           
+          let addedJob: Job | null = null;
           try {
-            const addedJob = await this.pendingQueue.add('pending-task', task, {
+            addedJob = await this.pendingQueue.add('pending-task', task, {
               priority: jobPriority,
               delay: 0, 
               removeOnComplete: 50,
@@ -596,9 +604,34 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
             
             recoveredCount++;
             
-          } catch (addError) {
-            this.logger.error(`添加任务 ${job.id} (${task.identifyTag}) 到调度队列时失败:`, addError);
-            skippedCount++;
+          } catch (recoveryError) {
+            // 3. 如果移除失败，进行错误处理
+            if (recoveryError instanceof Error && recoveryError.message.includes('is locked by another worker')) {
+              // 这是预期的竞态条件，旧 Worker 仍在处理任务
+              this.logger.warn(`任务 ${job.id} (${task.identifyTag}) 仍被锁定，可能是旧 Worker 仍在运行。将跳过本次恢复，等待锁释放。`);
+              // 最关键的一步：移除刚才重复添加的任务，防止任务重复执行
+              if (addedJob) {
+                try {
+                  await addedJob.remove();
+                  this.logger.log(`已从调度队列中移除为恢复任务 ${job.id} 而预添加的重复任务 ${addedJob.id}`);
+                } catch (removeError) {
+                  this.logger.error(`无法移除为恢复任务 ${job.id} 而添加的重复任务 ${addedJob.id}，可能导致任务重复执行:`, removeError);
+                }
+              }
+            } else {
+              // 其他未知错误
+              this.logger.error(`将任务 ${job.id} (${task.identifyTag}) 移动到调度队列时失败:`, recoveryError);
+              skippedCount++;
+               // 同样需要尝试移除，以防万一
+               if (addedJob) {
+                try {
+                  await addedJob.remove();
+                  this.logger.log(`已从调度队列中移除为恢复任务 ${job.id} 而预添加的重复任务 ${addedJob.id}`);
+                } catch (removeError) {
+                  this.logger.error(`无法移除为恢复任务 ${job.id} 而添加的重复任务 ${addedJob.id}，可能导致任务重复执行:`, removeError);
+                }
+              }
+            }
           }
           
         } catch (error) {
