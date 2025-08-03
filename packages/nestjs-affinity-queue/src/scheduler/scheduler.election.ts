@@ -177,9 +177,8 @@ export class SchedulerElectionService implements OnModuleInit, OnModuleDestroy {
       // 检查心跳是否超时
       if (now - leaderData.lastHeartbeat > this.heartbeatTimeout) {
         this.logger.log(`领导者 ${leaderData.nodeId} 心跳超时，尝试接管`);
-        // 删除过期的锁
-        await this.redis.del(this.ELECTION_LOCK_KEY);
-        // 尝试成为新的领导者
+        // 领导者心跳超时，锁应该也快过期了，直接尝试成为领导者
+        // tryBecomeLeader 内部会处理 SET NX，是原子操作
         await this.tryBecomeLeader();
       }
     } catch (error) {
