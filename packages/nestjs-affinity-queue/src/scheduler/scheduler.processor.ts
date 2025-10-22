@@ -73,7 +73,11 @@ export class SchedulerProcessor implements OnModuleInit, OnModuleDestroy {
           this.logger.log('⏸️ Scheduler stopped');
           
         } else if (!isLeader && !isSchedulerStarted) {
-          this.logger.debug('Waiting for scheduler leadership');
+          // 只有在确实没有领导者时才记录日志，避免 follower 节点刷屏
+          const leader = await this.electionService.getCurrentLeader();
+          if (!leader) {
+            this.logger.debug('Waiting for scheduler leadership');
+          }
         }
       } catch (error) {
         this.logger.error('检查选举状态时发生错误:', error);
