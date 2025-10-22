@@ -25,6 +25,8 @@ export interface QueueModuleOptions {
   workerOptions?: {
     maxBatchSize?: number;
     workerCount?: number;
+    concurrency?: number;
+    limiter?: { max: number; duration: number; groupKey?: string };
   };
   redisOptions?: {
     host?: string;
@@ -37,6 +39,8 @@ export interface QueueModuleOptions {
     workerQueuePrefix?: string;
     workerStatePrefix?: string;
     schedulerInterval?: number;
+    /** BullMQ 队列限流（分发到各 Worker 队列时生效） */
+    workerQueueLimiter?: { max: number; duration: number };
     /**
      * 每个 identifyTag 的并发数配置
      * 可以是：
@@ -59,6 +63,8 @@ export interface QueueModuleFeatureOptions {
   workerOptions?: {
     maxBatchSize?: number;
     workerCount?: number;
+    concurrency?: number;
+    limiter?: { max: number; duration: number; groupKey?: string };
   };
   redisOptions?: {
     host?: string;
@@ -71,6 +77,8 @@ export interface QueueModuleFeatureOptions {
     workerQueuePrefix?: string;
     workerStatePrefix?: string;
     schedulerInterval?: number;
+    /** BullMQ 队列限流（分发到各 Worker 队列时生效） */
+    workerQueueLimiter?: { max: number; duration: number };
     /**
      * 每个 identifyTag 的并发数配置
      * 可以是：

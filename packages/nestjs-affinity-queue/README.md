@@ -36,6 +36,7 @@ import { QueueModule } from 'nestjs-affinity-queue';
       workerOptions: {
         maxBatchSize: 10,
         workerCount: 2,
+        concurrency: 2, // 新增：每个 Worker 的并发度（每个实例内的并行度）
       },
       redisOptions: {
         host: 'localhost',
@@ -74,6 +75,7 @@ import { QueueModule } from 'nestjs-affinity-queue';
         workerOptions: {
           maxBatchSize: configService.get('QUEUE_MAX_BATCH_SIZE', 10),
           workerCount: configService.get('QUEUE_WORKER_COUNT', 2),
+          concurrency: configService.get('QUEUE_WORKER_CONCURRENCY', 2),
         },
         redisOptions: {
           host: configService.get('REDIS_HOST', 'localhost'),
@@ -116,6 +118,7 @@ import { QueueModule } from 'nestjs-affinity-queue';
       workerOptions: {
         maxBatchSize: 5,
         workerCount: 1,
+        concurrency: 2,
       },
       queueOptions: {
         pendingQueueName: 'email-pending-tasks',
@@ -152,6 +155,7 @@ import { QueueModule } from 'nestjs-affinity-queue';
         workerOptions: {
           maxBatchSize: configService.get('EMAIL_BATCH_SIZE', 5),
           workerCount: configService.get('EMAIL_WORKER_COUNT', 1),
+          concurrency: configService.get('EMAIL_WORKER_CONCURRENCY', 2),
         },
         queueOptions: {
           pendingQueueName: configService.get('EMAIL_QUEUE_NAME', 'email-pending-tasks'),
@@ -298,6 +302,7 @@ export class WorkerController {
 | `name` | `string` | `'default'` | 队列名称 |
 | `workerOptions.maxBatchSize` | `number` | `10` | 最大批处理大小 |
 | `workerOptions.workerCount` | `number` | `1` | 工作器数量 |
+| `workerOptions.concurrency` | `number` | `1` | 单个 Worker 并发度（每实例内并行度） |
 | `redisOptions.host` | `string` | `'localhost'` | Redis 主机 |
 | `redisOptions.port` | `number` | `6379` | Redis 端口 |
 | `redisOptions.password` | `string` | - | Redis 密码 |
@@ -597,6 +602,76 @@ EMAIL_QUEUE_MAX_BATCH=5
 FILE_QUEUE_MAX_BATCH=3
 APP_ROLE=BOTH
 ```
+
+## PM2 集群部署示例
+
+在 PM2 集群下，推荐采用“单 Leader（调度器），多 Worker”的模式：仅 leader 节点执行调度，但所有实例都运行 Worker 进行消费。保持 `role: 'BOTH'` 即可，调度器会通过选举自动只在一个实例上运行。
+
+### 单应用多实例（BOTH，推荐入门）
+
+```javascript
+// ecosystem.config.js
+module.exports = {
+  apps: [
+    {
+      name: 'affinity-app',
+      script: 'dist/main.js',
+      instances: 4,            // PM2 cluster 模式 4 实例
+      exec_mode: 'cluster',
+      env: {
+        NODE_ENV: 'production',
+        APP_ROLE: 'BOTH',      // 调度器+Worker；仅 leader 会启用调度
+        QUEUE_WORKER_COUNT: 1, // 每实例内 Worker 数
+        QUEUE_WORKER_CONCURRENCY: 2 // 每个 Worker 并发
+      }
+    }
+  ]
+}
+```
+
+要点：
+- 所有实例都会启动 Worker；只有 1 个实例当选 leader 启动调度器。
+- 通过 `QUEUE_WORKER_COUNT` 与 `QUEUE_WORKER_CONCURRENCY` 叠加可提升单实例吞吐。
+
+### 进阶：调度/工作器分离（更强可控性）
+
+```javascript
+// ecosystem.split.config.js
+module.exports = {
+  apps: [
+    // Scheduler 单例
+    {
+      name: 'affinity-scheduler',
+      script: 'dist/main.js',
+      instances: 1,
+      exec_mode: 'fork',
+      env: {
+        NODE_ENV: 'production',
+        APP_ROLE: 'SCHEDULER'
+      }
+    },
+    // Worker 组，可水平扩展
+    {
+      name: 'affinity-worker',
+      script: 'dist/main.js',
+      instances: 4,           // 或者 'max'
+      exec_mode: 'cluster',
+      env: {
+        NODE_ENV: 'production',
+        APP_ROLE: 'WORKER',
+        QUEUE_WORKER_COUNT: 1,
+        QUEUE_WORKER_CONCURRENCY: 2
+      }
+    }
+  ]
+}
+```
+
+要点：
+- Scheduler 与 Worker 解耦，伸缩更可控。
+- 若你仅需要 1 个调度器，保持 `instances: 1` 即可，无需依赖选举。
+
+无论采用哪种方式，请确保所有实例连接到同一 Redis，并且 `pendingQueueName` 等队列配置保持一致。任务亲和与 `identifyTagConcurrency` 将自动在多实例间生效。 
 
 ## 许可证
 

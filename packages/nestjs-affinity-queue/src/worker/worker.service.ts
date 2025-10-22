@@ -82,6 +82,7 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
       await this.updateWorkerState(workerId, state);
 
       const queueName = `${this.options.queueOptions.workerQueuePrefix}-${workerId}`;
+      const concurrency = this.options.workerOptions?.concurrency ?? 1;
       const worker = new Worker(
         queueName,
         async (job) => {
@@ -89,7 +90,7 @@ export class WorkerService implements OnModuleInit, OnModuleDestroy {
         },
         {
           connection: this.redis,
-          concurrency: 1, 
+          concurrency,
         }
       );
 
